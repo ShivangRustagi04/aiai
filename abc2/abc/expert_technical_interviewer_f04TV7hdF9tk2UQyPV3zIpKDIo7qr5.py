@@ -248,7 +248,7 @@ class ExpertTechnicalInterviewer:
         try:
             # Friendly introduction
             self.speak("Hello! I am Gyani. Welcome to your interview session today. I'm excited to chat with you!", interruptible=False)
-            time.sleep(6)
+            time.sleep(1)
             msg = "Before we begin, how has your day been so far?"
             self.speak(msg, interruptible=False)
             self.wait_after_speaking(msg)
@@ -527,8 +527,8 @@ class ExpertTechnicalInterviewer:
             })
 
             self.speak("I've prepared a coding challenge for you. Here's the problem:", interruptible=False)
-            self.speak(self.current_coding_question, interruptible=False)
             time.sleep(1)  # 1 second pause after speaking question
+            print(f"\nCoding Challenge: {self.current_coding_question}")
 
             self.coding_questions_asked += 1
             hint_offered = False
