@@ -24,13 +24,12 @@ import boto3
 from sentence_transformers import SentenceTransformer
 import faiss  # For vector similarity search
 import json
-import os
 
 # Load environment variables
 load_dotenv()
 
 class ExpertTechnicalInterviewer:
-    def __init__(self, model="gemini-2.0-flash", accent="indian"):
+    def __init__(self, model="gemini-1.5-flash", accent="indian"):
         try:
             self.api_key = os.getenv("GEMINI_API_KEY")
             if not self.api_key:
@@ -54,9 +53,10 @@ class ExpertTechnicalInterviewer:
             self.tone_warnings = 0
             self.cheating_warnings = 0
             self.filler_phrases = [
-            "I see...", "Interesting...", "That makes sense...", 
-            "Go on...", "Yes, I understand...", "Right...",
-            "Okay...", "Hmm...", "Got it...", "Please continue..."]
+                "I see...", "Interesting...", "That makes sense...", 
+                "Go on...", "Yes, I understand...", "Right...",
+                "Okay...", "Hmm...", "Got it...", "Please continue..."
+            ]
             self.tab_monitor_ready = False
             self.last_face_detection_time = time.time()
             self.tab_change_detected = False
@@ -85,8 +85,8 @@ class ExpertTechnicalInterviewer:
                 "frontend": ["React", "Angular", "Vue", "JavaScript", "TypeScript", "CSS", "HTML5"],
                 "backend": ["Node.js", "Django", "Spring", "Go", "Rust", "Microservices", "APIs"],
                 "AI": ["TensorFlow", "PyTorch", "NLP", "Computer Vision", "LLMs", "Generative AI"],
-                "data science": [ "data science","Pandas", "NumPy", "SQL", "Data Visualization", "ETL", "Big Data"],
-                "machine learning": ["machine learning","Scikit-learn", "Keras", "Model Deployment", "Feature Engineering"],
+                "data science": ["data science", "Pandas", "NumPy", "SQL", "Data Visualization", "ETL", "Big Data"],
+                "machine learning": ["machine learning", "Scikit-learn", "Keras", "Model Deployment", "Feature Engineering"],
                 "devops": ["Docker", "Kubernetes", "AWS", "CI/CD", "Terraform", "Monitoring"],
                 "mobile": ["Flutter", "React Native", "Swift", "Kotlin", "Mobile UX"],
                 "python": ["Python", "Flask", "FastAPI", "Django", "Data Structures", "Algorithms"],
@@ -128,6 +128,7 @@ class ExpertTechnicalInterviewer:
         except Exception as e:
             print(f"Initialization error: {e}")
             raise
+
     def submit_candidate_code(self, code_string):
         """Save candidate's code submission."""
         self.latest_code_submission = code_string
@@ -179,22 +180,9 @@ class ExpertTechnicalInterviewer:
             print(f"Error generating non-tech question: {e}")
             return f"Can you describe your experience working in {domain}?"
         
-
     def _get_filler_phrase(self):
         """Return appropriate filler phrases to show active listening"""
-        fillers = [
-            "I see...",
-            "Interesting...",
-            "That makes sense...",
-            "Go on...",
-            "Yes, I understand...",
-            "Right...",
-            "Okay...",
-            "Hmm...",
-            "Got it...",
-            "Please continue..."
-        ]
-        return random.choice(fillers)
+        return random.choice(self.filler_phrases)
 
     def _execute_code(self, language, file_path):
         try:
@@ -279,7 +267,7 @@ class ExpertTechnicalInterviewer:
 
             # Questions Phase - Different for tech vs non-tech
             question_count = 0
-            max_questions = 6
+            max_questions = 1
             
             if is_tech_interview:
                 self.speak("Let's start with some technical questions to understand your experience better.", interruptible=False)
@@ -414,57 +402,9 @@ class ExpertTechnicalInterviewer:
                         self.conversation_history.append({"role": "assistant", "content": msg})  # Add question first
                         self.conversation_history.append({"role": "user", "content": answer})    # Then add user's answer
                         self.just_repeated = False
-
-            # Coding Questions (only for tech interviews)
-            if is_tech_interview and self.interview_active and self.coding_questions_asked < self.max_coding_questions:
-                self.speak("Great discussion! Now I'd like to give you a couple of coding challenges to see your problem-solving skills in action.", interruptible=False)
-                time.sleep(1)
-
-                while self.coding_questions_asked < self.max_coding_questions and self.interview_active:
-                    self.current_coding_question = self._generate_coding_question(self.current_domain or "python")
-                    self.conversation_history.append({
-                        "role": "assistant",
-                        "content": f"[Coding Challenge Question]\n{self.current_coding_question}"
-                    })
-
-                    self.speak("I've prepared a coding challenge for you. Here's the problem:", interruptible=False)
-                    self.speak(self.current_coding_question, interruptible=False)
-                    self.speak("Please describe your approach to solving this problem.", interruptible=False)
-
-                    spoken_approach = self.listen()
-                    if spoken_approach:
-                        self.conversation_history.append({
-                            "role": "user",
-                            "content": f"[Candidate's Spoken Approach]\n{spoken_approach}"
-                        })
-
-                    self.coding_questions_asked += 1
-                    self.conversation_history.append({
-                        "role": "user",
-                        "content": f"[Candidate's Code Submission]\n{self.latest_code_submission}"
-                    })
-
-                    time.sleep(6)
-
-                    
-                    hint_offered = False
-                    start_time = time.time()
-
-                    while self.coding_questions_asked < self.max_coding_questions and self.interview_active:
-                        time.sleep(1)
-                        
-                        # Offer a hint after 2 minutes of inactivity
-                        if not hint_offered and time.time() - start_time > 120:
-                            self.speak("Would you like a small hint to help you get started?", interruptible=False)
-                            self.wait_after_speaking("Would you like a small hint to help you get started?")
-                            response = self.listen()
-                            if response and "yes" in response.lower():
-                                self._give_small_hint(self.current_coding_question)
-                            hint_offered = True
-
-                    if not self.interview_active:
-                        break
-                    time.sleep(6)
+            if is_tech_interview and self.interview_active:
+                if self.coding_questions_asked < self.max_coding_questions:
+                    self._conduct_coding_challenge()
 
             # Closing
             if self.interview_active:
@@ -494,16 +434,15 @@ class ExpertTechnicalInterviewer:
                 self.speak("What would you like to ask?", interruptible=False)
                 
                 # Allow up to 3 questions with follow-up
-                max_questions = 3
                 questions_asked = 0
-                
-                while questions_asked < max_questions and self.interview_active:
-                    self.wait_after_speaking("Do you have any questions?")
+                max_questions = 3
+                timeout = time.time() + 60  # 1 minute timeout
+
+                while questions_asked < max_questions and self.interview_active and time.time() < timeout:
                     question = self.listen()
-                    
                     if question and len(question.split()) > 3:
+                        # Process question
                         questions_asked += 1
-                        
                         # Get answer from AI
                         answer_prompt = f"""Provide a concise but helpful answer to this {'technical' if is_tech_interview else 'professional'} question:
                         Question: {question}
@@ -543,6 +482,8 @@ class ExpertTechnicalInterviewer:
                         
                         if questions_asked < max_questions:
                             self.speak("Do you have any other questions?", interruptible=False)
+                    elif "nothing" in question.lower() or "no questions" in question.lower():
+                        break
                 
                 self.speak("Thank you so much for your time today. It was a pleasure talking with you, and I wish you the best of luck!", interruptible=False)
 
@@ -555,6 +496,55 @@ class ExpertTechnicalInterviewer:
             docx_path = self._save_transcription_to_docx()
             self._generate_feedback_from_docx(docx_path)
             self._stop_camera()
+
+    def _conduct_coding_challenge(self):
+        self.speak("Great discussion! Now I'd like to give you a couple of coding challenges to see your problem-solving skills in action.", interruptible=False)
+        time.sleep(1)
+
+        while self.coding_questions_asked < self.max_coding_questions and self.interview_active:
+            self.current_coding_question = self._generate_coding_question(self.current_domain or "python")
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": f"[Coding Challenge Question]\n{self.current_coding_question}"
+            })
+
+            self.speak("I've prepared a coding challenge for you. Here's the problem:", interruptible=False)
+            self.speak(self.current_coding_question, interruptible=False)
+            self.speak("Please describe your approach to solving this problem.", interruptible=False)
+
+            spoken_approach = self.listen()
+            if spoken_approach:
+                self.conversation_history.append({
+                    "role": "user",
+                    "content": f"[Candidate's Spoken Approach]\n{spoken_approach}"
+                })
+
+            self.coding_questions_asked += 1
+            self.conversation_history.append({
+                "role": "user",
+                "content": f"[Candidate's Code Submission]\n{self.latest_code_submission}"
+            })
+
+            time.sleep(6)
+
+            hint_offered = False
+            start_time = time.time()
+
+            while self.coding_questions_asked < self.max_coding_questions and self.interview_active:
+                time.sleep(1)
+                
+                # Offer a hint after 2 minutes of inactivity
+                if not hint_offered and time.time() - start_time > 120:
+                    self.speak("Would you like a small hint to help you get started?", interruptible=False)
+                    self.wait_after_speaking("Would you like a small hint to help you get started?")
+                    response = self.listen()
+                    if response and "yes" in response.lower():
+                        self._give_small_hint(self.current_coding_question)
+                    hint_offered = True
+
+            if not self.interview_active:
+                break
+            time.sleep(6)
 
     def _start_camera(self):
         """Start the camera for face detection"""
@@ -569,8 +559,10 @@ class ExpertTechnicalInterviewer:
             self.camera_active = False
 
     def _monitor_face_and_attention(self):    
+        multiple_faces_warning_given = False
+        looking_away_warning_given = False
+        
         while self.monitoring_active and self.interview_active:
-            try:
                 if not self.camera_active or not self.cap:
                     time.sleep(2)
                     continue
@@ -614,8 +606,7 @@ class ExpertTechnicalInterviewer:
                         roi_gray,
                         scaleFactor=1.1,
                         minNeighbors=3,
-                        minSize=(30, 30)
-                    )
+                        minSize=(30, 30))
                     
                     # Only check attention if we have good eye detection
                     if len(eyes) >= 2:  # At least two eyes detected
@@ -628,11 +619,6 @@ class ExpertTechnicalInterviewer:
                             looking_away_warning_given = True
                         elif avg_eye_y <= h * 0.75:
                             looking_away_warning_given = False
-                
-            except Exception as e:
-                print(f"Camera error: {e}")
-                self._restart_camera()
-                time.sleep(1)
 
     def _restart_camera(self):
         try:
@@ -644,8 +630,6 @@ class ExpertTechnicalInterviewer:
             self.camera_active = True
         except Exception as e:
             print(f"Camera restart failed: {e}")
-                
-            time.sleep(0.5)  # Reduce CPU usage
 
     def _monitor_tab_changes(self):
         while not self.tab_monitor_ready:
@@ -824,6 +808,7 @@ class ExpertTechnicalInterviewer:
         self.conversation_history.append({"role": "user", "content": placeholder})
         self.speak("Let's continue with the next part of our interview.", interruptible=False)
         return placeholder
+
     def _rephrase_question(self, question):
         """Rephrase the given question while keeping the same meaning"""
         prompt = f"""Rephrase this interview question to make it clearer while keeping the same meaning:
@@ -908,37 +893,46 @@ class ExpertTechnicalInterviewer:
     def _identify_tech_domain(self, text):
         if not text:
             return None
-            
-        # Check tech domains first
-        domain_scores = {domain: 0 for domain in self.tech_domains}
+
         text_lower = text.lower()
-        
-        for domain, skills in self.tech_domains.items():
-            for skill in skills:
-                skill_lower = skill.lower()
-                if skill_lower in text_lower:
-                    domain_scores[domain] += 1
-                elif re.search(r'\b' + re.escape(skill_lower) + r'\b', text_lower):
+        domain_scores = {domain: 0 for domain in self.tech_domains}
+
+        for domain, keywords in self.tech_domains.items():
+            for keyword in keywords:
+                if keyword.lower() in text_lower:
                     domain_scores[domain] += 2
-                    
-        best_tech_domain = max(domain_scores.items(), key=lambda x: x[1])
-        
-        # If no strong tech domain found, check non-tech domains
-        if best_tech_domain[1] < 2:
-            domain_scores = {domain: 0 for domain in self.non_tech_domains}
-            
-            for domain, skills in self.non_tech_domains.items():
-                for skill in skills:
-                    skill_lower = skill.lower()
-                    if skill_lower in text_lower:
-                        domain_scores[domain] += 1
-                    elif re.search(r'\b' + re.escape(skill_lower) + r'\b', text_lower):
-                        domain_scores[domain] += 2
-            
-            best_non_tech_domain = max(domain_scores.items(), key=lambda x: x[1])
-            return best_non_tech_domain[0] if best_non_tech_domain[1] > 0 else None
-        else:
-            return best_tech_domain[0]
+                elif re.search(r'\b' + re.escape(keyword.lower()) + r'\b', text_lower):
+                    domain_scores[domain] += 1
+
+        best_tech_domain, tech_score = max(domain_scores.items(), key=lambda x: x[1])
+
+        if tech_score >= 2:
+            print(f"[Domain Detection] Detected technical domain: {best_tech_domain}")
+            return best_tech_domain
+
+        # Check non-technical domains
+        domain_scores = {domain: 0 for domain in self.non_tech_domains}
+        for domain, keywords in self.non_tech_domains.items():
+            for keyword in keywords:
+                if keyword.lower() in text_lower:
+                    domain_scores[domain] += 2
+                elif re.search(r'\b' + re.escape(keyword.lower()) + r'\b', text_lower):
+                    domain_scores[domain] += 1
+
+        best_non_tech_domain, non_tech_score = max(domain_scores.items(), key=lambda x: x[1])
+
+        if non_tech_score >= 2:
+            print(f"[Domain Detection] Detected non-technical domain: {best_non_tech_domain}")
+            return best_non_tech_domain
+
+        # If ambiguous but tech keywords exist, fallback
+        fallback_keywords = ["pandas", "numpy", "machine learning", "tensorflow", "keras", "python", "scikit", "data pipeline", "model", "deployment"]
+        if any(kw in text_lower for kw in fallback_keywords):
+            print("[Domain Detection] Fallback to technical domain: data science")
+            return "data science"
+
+        print("[Domain Detection] No strong domain match found.")
+        return None
 
     def _generate_coding_question(self, domain, difficulty="medium"):
         """Generate a coding question based on the candidate's domain"""
@@ -1003,34 +997,6 @@ Constraints: Preserve spaces between words, handle empty strings gracefully."""
         
         return fallback_questions.get(domain, fallback_questions["default"])
 
-    def _generate_domain_followup(self, context, domain):
-        """Generate a context-aware follow-up question for the domain"""
-        if not domain or not context:
-            return None
-            
-        prompt = f"""As a friendly technical interviewer specializing in {domain}, generate one concise follow-up question 
-                based on this conversation context. The question should:
-                - Be technically relevant to {domain}
-                - Reference specific technologies mentioned if possible
-                - Be conversational and encouraging
-                - Be no longer than one sentence
-                - Ask one question at a time
-                - Focus on practical experience and understanding
-                - Avoid overly complex theoretical questions
-                - Be appropriate for the candidate's stated experience level
-
-                Conversation context:
-                {context}
-
-                Generate only the question, no additional text."""
-
-        
-        try:
-            response = self.query_gemini(prompt)
-            return response.strip() if response else None
-        except Exception as e:
-            print(f"Error generating followup: {e}")
-            return None
     def _coding_followup(self, code, language):
         """Ask follow-up questions about the code submitted by the candidate."""
         prompt = f"""You are an expert software engineer reviewing code written in {language}.
@@ -1055,43 +1021,6 @@ Constraints: Preserve spaces between words, handle empty strings gracefully."""
         except Exception as e:
             print(f"Error generating coding follow-up: {e}")
             return "Can you walk me through your code and explain your approach?"
-
-
-    def _add_domain_specific_followup(self, domain):
-        """Generate only the follow-up question based on recent conversation and domain"""
-        if not domain:
-            return None
-
-        # Get recent conversation context (last 2 exchanges)
-        context = "\n".join(
-            f"{msg['role'].capitalize()}: {msg['content']}" 
-            for msg in self.conversation_history[-2:]
-        )
-
-        prompt = f"""As a friendly technical interviewer specializing in {domain}, generate one concise follow-up question 
-        based on this conversation context. The question should:
-        - Be technically relevant to {domain}
-        - Reference specific technologies mentioned if possible
-        - Be conversational and encouraging
-        - Be no longer than one sentence
-        - Ask one question at a time
-        - Focus on practical experience and understanding
-        - Avoid overly complex theoretical questions
-        - Be appropriate for the candidate's stated experience level
-
-        Conversation context:
-        {context}
-
-        Generate only the question, no additional text."""
-
-        try:
-            response = self.query_gemini(prompt)
-            return response.strip() if response else None
-        except Exception as e:
-            print(f"Error generating follow-up: {e}")
-            return None
-        
-
 
     def _save_transcription_to_docx(self, file_path="interview_transcript.docx"):
         doc = Document()
@@ -1155,6 +1084,7 @@ Constraints: Preserve spaces between words, handle empty strings gracefully."""
         
         except Exception as e:
             print(f"[ERROR] Feedback generation failed: {e}")
+
     def start_interview(self):
         # Start tab monitoring
         def enable_tab_monitor():
@@ -1171,72 +1101,9 @@ Constraints: Preserve spaces between words, handle empty strings gracefully."""
         # Keep the main thread alive while interview is active
         while self.interview_active:
             time.sleep(1)
+
 class RAGExpertTechnicalInterviewer(ExpertTechnicalInterviewer):
-    def __init__(self, model="gemini-2.0-flash", accent="indian"):
-        super().__init__(model, accent)
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')  # Pre-trained embedding model
-        self.knowledge_base_path = "knowledge_base.json"
-        self.vector_index_path = "vector_index.faiss"
-        self.vector_dimension = 384  # MiniLM-L6 outputs 384-dimensional vectors
-        self.vector_index = self._load_or_create_vector_index()
-        self.knowledge_base = self._load_knowledge_base()
-
-    def _load_or_create_vector_index(self):
-        """Load an existing FAISS index or create a new one."""
-        if os.path.exists(self.vector_index_path):
-            return faiss.read_index(self.vector_index_path)
-        else:
-            return faiss.IndexFlatL2(self.vector_dimension)
-
-    def _load_knowledge_base(self):
-        if os.path.exists(self.knowledge_base_path):
-            with open(self.knowledge_base_path, "r") as f:
-                return json.load(f)
-        return []
-
-    def _save_knowledge_base(self):
-        with open(self.knowledge_base_path, "w") as f:
-            json.dump(self.knowledge_base, f, indent=4)
-
-    def _save_vector_index(self):
-        faiss.write_index(self.vector_index, self.vector_index_path)
-
-    def _add_to_knowledge_base(self, text):
-        """Add new text to the knowledge base and update the vector index."""
-        embedding = self.embedding_model.encode(text)
-        self.knowledge_base.append({"text": text, "embedding": embedding.tolist()})
-        self.vector_index.add(np.array([embedding]))
-        self._save_knowledge_base()
-        self._save_vector_index()
-
-    def _retrieve_context(self, query, top_k=3):
-        """Retrieve the top-k most relevant documents from the knowledge base."""
-        query_embedding = self.embedding_model.encode(query)
-        distances, indices = self.vector_index.search(np.array([query_embedding]), top_k)
-        retrieved_texts = [self.knowledge_base[i]["text"] for i in indices[0]]
-        return retrieved_texts
-
-    def query_gemini_with_rag(self, prompt, query):
-        """Query the generative model with additional context from the knowledge base."""
-        retrieved_context = self._retrieve_context(query)
-        full_prompt = f"{prompt}\n\nAdditional Context:\n" + "\n".join(retrieved_context)
-        return self.query_gemini(full_prompt)
-
-    def _update_knowledge_base_after_interview(self):
-        """Update the knowledge base with the latest conversation history."""
-        for msg in self.conversation_history:
-            self._add_to_knowledge_base(msg["content"])
-
-    def _run_interview_logic(self):
-        try:
-            super()._run_interview_logic()
-        finally:
-            # Update the knowledge base after the interview ends
-            self._update_knowledge_base_after_interview()
-            docx_path = self._save_transcription_to_docx()
-            self._generate_feedback_from_docx(docx_path)
-class RAGExpertTechnicalInterviewer(ExpertTechnicalInterviewer):
-    def __init__(self, model="gemini-2.0-flash", accent="indian"):
+    def __init__(self, model="gemini-1.5-flash", accent="indian"):
         super().__init__(model, accent)
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')  # Pre-trained embedding model
         self.knowledge_base_path = "knowledge_base.json"
@@ -1302,6 +1169,7 @@ class RAGExpertTechnicalInterviewer(ExpertTechnicalInterviewer):
             self._update_knowledge_base_after_interview()
             docx_path = self._save_transcription_to_docx()
             self._generate_feedback_from_docx(docx_path)
+
 if __name__ == "__main__":
     try:
         interviewer = ExpertTechnicalInterviewer()
