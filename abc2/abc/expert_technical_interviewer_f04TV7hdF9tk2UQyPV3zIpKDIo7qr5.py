@@ -130,17 +130,35 @@ class ExpertTechnicalInterviewer:
             raise
 
     def submit_candidate_code(self, code_string):
-        """Save candidate's code submission."""
+        """Save candidate's code submission and ask follow-up questions."""
         self.latest_code_submission = code_string
+        if code_string and self.current_coding_question:
+            # Ask follow-up question about the code
+            followup = self._coding_followup(code_string, self._identify_language_from_code(code_string))
+            if followup:
+                self.speak(followup, interruptible=False)
+                time.sleep(1)  # 1 second pause
+                answer = self.listen()
+                if answer:
+                    self.conversation_history.append({
+                        "role": "user", 
+                        "content": f"[Follow-up Answer]\n{answer}"
+                    })
+
+    def _identify_language_from_code(self, code):
+        """Simple language detection from code snippet"""
+        if "def " in code or "import " in code:
+            return "Python"
+        elif "class " in code and "{" in code:
+            return "Java"
+        elif "#include" in code:
+            return "C++"
+        elif "function " in code or "const " in code:
+            return "JavaScript"
+        return "Python"  # default
 
     def wait_after_speaking(self, message, base=0.6, per_word=0.15):
-        if not message:
-            time.sleep(base + 0.5)
-            return
-        words = message.split()
-        delay = base + per_word * len(words)
-        print(f"[Pause] Waiting {round(delay, 2)}s after speaking.")
-        time.sleep(delay)
+        time.sleep(1)  # Always wait 1 second after speaking
 
     def _give_small_hint(self, question_text):
         hint_prompt = f"""You are an AI coding interviewer. Give a small hint for the following problem.
@@ -499,7 +517,7 @@ class ExpertTechnicalInterviewer:
 
     def _conduct_coding_challenge(self):
         self.speak("Great discussion! Now I'd like to give you a couple of coding challenges to see your problem-solving skills in action.", interruptible=False)
-        time.sleep(1)
+        time.sleep(1)  # 1 second pause
 
         while self.coding_questions_asked < self.max_coding_questions and self.interview_active:
             self.current_coding_question = self._generate_coding_question(self.current_domain or "python")
@@ -510,23 +528,9 @@ class ExpertTechnicalInterviewer:
 
             self.speak("I've prepared a coding challenge for you. Here's the problem:", interruptible=False)
             self.speak(self.current_coding_question, interruptible=False)
-            self.speak("Please describe your approach to solving this problem.", interruptible=False)
-
-            spoken_approach = self.listen()
-            if spoken_approach:
-                self.conversation_history.append({
-                    "role": "user",
-                    "content": f"[Candidate's Spoken Approach]\n{spoken_approach}"
-                })
+            time.sleep(1)  # 1 second pause after speaking question
 
             self.coding_questions_asked += 1
-            self.conversation_history.append({
-                "role": "user",
-                "content": f"[Candidate's Code Submission]\n{self.latest_code_submission}"
-            })
-
-            time.sleep(6)
-
             hint_offered = False
             start_time = time.time()
 
@@ -536,7 +540,7 @@ class ExpertTechnicalInterviewer:
                 # Offer a hint after 2 minutes of inactivity
                 if not hint_offered and time.time() - start_time > 120:
                     self.speak("Would you like a small hint to help you get started?", interruptible=False)
-                    self.wait_after_speaking("Would you like a small hint to help you get started?")
+                    time.sleep(1)  # 1 second pause
                     response = self.listen()
                     if response and "yes" in response.lower():
                         self._give_small_hint(self.current_coding_question)
@@ -544,7 +548,7 @@ class ExpertTechnicalInterviewer:
 
             if not self.interview_active:
                 break
-            time.sleep(6)
+            time.sleep(1)
 
     def _start_camera(self):
         """Start the camera for face detection"""
