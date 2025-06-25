@@ -53,6 +53,7 @@ class ExpertTechnicalInterviewer:
             self.recognizer.phrase_threshold = 0.2
             self.tone_warnings = 0
             self.cheating_warnings = 0
+            self.question_count = 0
             self.filler_phrases = [
                 "I see...", "Interesting...", "That makes sense...", 
                 "Go on...", "Yes, I understand...", "Right...",
@@ -520,7 +521,7 @@ class ExpertTechnicalInterviewer:
                 break
 
         if answer_received and not self.just_repeated:
-            question_count += 1  # Increment only for original questions
+            self.question_count += 1  # Increment only for original questions
             self.conversation_history.append({"role": "assistant", "content": question})
             self.conversation_history.append({"role": "user", "content": answer})
             self.just_repeated = False
@@ -664,7 +665,7 @@ class ExpertTechnicalInterviewer:
                         break
 
                 if answer_received:
-                    question_count += 1
+                    self.question_count += 1
                     self.conversation_history.append({"role": "assistant", "content": msg})
                     self.conversation_history.append({"role": "user", "content": answer})
                     self.just_repeated = False
