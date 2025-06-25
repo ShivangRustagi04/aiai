@@ -345,7 +345,10 @@ class ExpertTechnicalInterviewer:
             # Technical/Professional Questions Section (30 minutes)
             self._start_section("technical_questions")
             self._ask_client_questions()  # Ask client-provided questions first
-            self._conduct_question_phase(is_tech_interview)
+            
+            # Only proceed with generated questions if we have time
+            if not self._should_transition_to_next_section("technical_questions"):
+                self._conduct_question_phase(is_tech_interview)
             
             # Coding Challenge Section (20 minutes, tech interviews only)
             if is_tech_interview and self.interview_active:
@@ -411,6 +414,32 @@ class ExpertTechnicalInterviewer:
             self.conversation_history.append({"role": "user", "content": background})
             self.current_domain = self._identify_tech_domain(background)
 
+    def _should_transition_to_next_section(self, current_section):
+        """Determine if we should transition to next section based on time"""
+        time_remaining = self._check_time_remaining(current_section)
+        min_time_for_next = self._get_section_duration(self._get_next_section(current_section))
+        
+        # If less than 25% of total time remains or not enough time for next section
+        if (time_remaining < (self.total_duration * 60 * 0.25) or 
+            time_remaining < min_time_for_next):
+            return True
+        return False
+
+    def _get_next_section(self, current_section):
+        """Get the next section in the interview flow"""
+        sections = [
+            "introduction",
+            "background",
+            "technical_questions",
+            "coding_challenge",
+            "doubt_clearing",
+            "closing"
+        ]
+        try:
+            return sections[sections.index(current_section) + 1]
+        except (ValueError, IndexError):
+            return "closing"
+
     def _ask_client_questions(self):
         """Ask client-provided questions or generate domain-specific ones"""
         if self.client_questions:
@@ -418,34 +447,14 @@ class ExpertTechnicalInterviewer:
             time.sleep(1)
             
             for question in self.client_questions[:]:
-                if self._check_time_remaining("technical_questions") < 60:
-                    break
+                # Check if we should transition to next section
+                if self._should_transition_to_next_section("technical_questions"):
+                    return
                     
                 if question not in self.used_client_questions:
                     self._ask_question_with_followup(question)
                     self.used_client_questions.append(question)
                     self.client_questions.remove(question)
-        else:
-            # Generate domain-specific questions if none provided
-            self.speak("Let's begin with some questions about your domain expertise.", interruptible=False)
-            time.sleep(1)
-            
-            question_count = 0
-            max_questions = 1
-
-            while self._check_time_remaining("technical_questions") > 120 and question_count < max_questions:
-
-                
-                question = self._generate_domain_question(
-                    domain=self.current_domain,
-                    experience_level=self._estimate_experience_level()
-                )
-                
-                if question and question not in self.used_client_questions:
-                    self._ask_question_with_followup(question)
-                    self.used_client_questions.append(question)
-                    question_count += 1 
-
     def _estimate_experience_level(self):
         """Estimate candidate's experience level based on conversation"""
         # Simple heuristic - count years mentioned
@@ -558,8 +567,8 @@ class ExpertTechnicalInterviewer:
             self.speak("Let's discuss your professional experience in more detail.", interruptible=False)
 
         while (question_count < max_questions and 
-               self.interview_active and 
-               self._check_time_remaining("technical_questions") > 60):  # At least 1 minute left
+            self.interview_active and 
+            not self._should_transition_to_next_section("technical_questions")):
             
             if len(self.conversation_history) > 15:
                 self.conversation_history = self.conversation_history[-8:]
@@ -906,7 +915,7 @@ Constraints: Preserve spaces between words, handle empty strings gracefully."""
                         self._restart_camera()
                         continue
                     
-                # Convert to grayscale and apply histogram equalization
+                # Convert to grayscale de apply histogram equalization
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 gray = cv2.equalizeHist(gray)
                 
