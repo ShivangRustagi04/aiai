@@ -29,7 +29,7 @@ from datetime import datetime, timedelta
 load_dotenv()
 
 class ExpertTechnicalInterviewer:
-    def __init__(self, model="gemini-1.5-flash", accent="indian", 
+    def __init__(self, model="gemini-2.0-flash", accent="indian", 
                  client_questions=None, total_duration=80):
         try:
             self.api_key = os.getenv("GEMINI_API_KEY")
@@ -91,54 +91,16 @@ class ExpertTechnicalInterviewer:
             self.current_coding_question = None
             
             self.tech_domains = {
-                "frontend": {
-                    "description": "Frontend development with modern JavaScript frameworks",
-                    "levels": {
-                        "junior": ["React basics", "CSS layout", "DOM manipulation"],
-                        "mid": ["State management", "Performance optimization", "Component design"],
-                        "senior": ["Architecture patterns", "Cross-team collaboration", "Technical leadership"]
-                    }
-                },
-                "backend": {
-                    "description": "Backend development and API design",
-                    "levels": {
-                        "junior": ["REST basics", "Database queries", "Error handling"],
-                        "mid": ["API design", "Authentication", "Microservices"],
-                        "senior": ["System architecture", "Scalability", "Database optimization"]
-                    }
-                },
-                "AI": {
-                    "description": "Artificial Intelligence and Machine Learning",
-                    "levels": {
-                        "junior": ["Model training basics", "Data preprocessing", "Simple algorithms"],
-                        "mid": ["Model evaluation", "Feature engineering", "Hyperparameter tuning"],
-                        "senior": ["Production deployment", "Research techniques", "Ethical considerations"]
-                    }
-                },
-                "data science": {
-                    "description": "Data analysis and visualization",
-                    "levels": {
-                        "junior": ["Pandas operations", "Basic visualizations", "Data cleaning"],
-                        "mid": ["Statistical analysis", "Advanced visualizations", "Feature selection"],
-                        "senior": ["Big data systems", "ML integration", "Data pipeline design"]
-                    }
-                },
-                "devops": {
-                    "description": "Infrastructure and deployment automation",
-                    "levels": {
-                        "junior": ["Basic Docker usage", "CI/CD concepts", "Monitoring basics"],
-                        "mid": ["Kubernetes orchestration", "Infrastructure as code", "Performance tuning"],
-                        "senior": ["Architecture design", "Security hardening", "Disaster recovery"]
-                    }
-                },
-                "python": {
-                    "description": "Python programming language",
-                    "levels": {
-                        "junior": ["Syntax basics", "Standard library", "Simple scripts"],
-                        "mid": ["Decorators", "Context managers", "Package development"],
-                        "senior": ["Metaprogramming", "Performance optimization", "Interoperability"]
-                    }
-                }
+                "frontend": ["React", "Angular", "Vue", "JavaScript", "TypeScript", "CSS", "HTML5"],
+                "backend": ["Node.js", "Django", "Spring", "Go", "Rust", "Microservices", "APIs"],
+                "AI": ["TensorFlow", "PyTorch", "NLP", "Computer Vision", "LLMs", "Generative AI"],
+                "data science": ["data science", "Pandas", "NumPy", "SQL", "Data Visualization", "ETL", "Big Data"],
+                "machine learning": ["machine learning", "Scikit-learn", "Keras", "Model Deployment", "Feature Engineering"],
+                "devops": ["Docker", "Kubernetes", "AWS", "CI/CD", "Terraform", "Monitoring"],
+                "mobile": ["Flutter", "React Native", "Swift", "Kotlin", "Mobile UX"],
+                "python": ["Python", "Flask", "FastAPI", "Django", "Data Structures", "Algorithms"],
+                "java": ["Java", "Spring Boot", "JVM", "Object Oriented Programming", "Collections"],
+                "cpp": ["C++", "STL", "Memory Management", "Object Oriented Programming", "Data Structures"]
             }
         
             self.non_tech_domains = {
@@ -280,7 +242,6 @@ class ExpertTechnicalInterviewer:
         }.get(language, ".txt")
 
     def _generate_domain_question(self, domain, experience_level="mid"):
-        """Generate a domain-specific question based on candidate's level"""
         if domain not in self.tech_domains and domain not in self.non_tech_domains:
             domain = "python"  # Default fallback
             
@@ -290,8 +251,7 @@ class ExpertTechnicalInterviewer:
         if not domain_info:
             return "Can you describe your experience with this technology?"
             
-        prompt = f"""Generate one interview question about {domain} ({domain_info.get('description', '')}) 
-        appropriate for a {experience_level} level candidate.
+        prompt = f"""Generate one interview question about {domain}.
         
         The question should:
         - Test practical, real-world knowledge
@@ -300,7 +260,7 @@ class ExpertTechnicalInterviewer:
         - Be specific enough to evaluate depth of knowledge
         - Be answerable in 2-3 minutes
         
-        Suggested topics: {', '.join(domain_info['levels'].get(experience_level, []))}
+        Suggested topics: {', '.join(domain_info)}
         
         Return only the question, no additional text."""
         
@@ -319,6 +279,7 @@ class ExpertTechnicalInterviewer:
                 "default": "Can you walk me through your approach to solving [domain-related problem]?"
             }
             return fallbacks.get(domain, fallbacks["default"])
+
 
     def _get_filler_phrase(self):
         """Return appropriate filler phrases to show active listening"""
@@ -469,8 +430,11 @@ class ExpertTechnicalInterviewer:
             self.speak("Let's begin with some questions about your domain expertise.", interruptible=False)
             time.sleep(1)
             
-            while (self._check_time_remaining("technical_questions") > 120 and  # At least 2 minutes left
-                   len(self.used_client_questions) < 5):  # Max 5 generated questions
+            question_count = 0
+            max_questions = 1
+
+            while self._check_time_remaining("technical_questions") > 120 and question_count < max_questions:
+
                 
                 question = self._generate_domain_question(
                     domain=self.current_domain,
@@ -480,6 +444,7 @@ class ExpertTechnicalInterviewer:
                 if question and question not in self.used_client_questions:
                     self._ask_question_with_followup(question)
                     self.used_client_questions.append(question)
+                    question_count += 1 
 
     def _estimate_experience_level(self):
         """Estimate candidate's experience level based on conversation"""
@@ -534,12 +499,19 @@ class ExpertTechnicalInterviewer:
                 
                 # Ask follow-up question based on answer
                 followup = self._generate_followup_question(question, answer)
-                if followup and self._check_time_remaining("technical_questions") > 60:  # At least 1 minute left
-                    self._ask_question_with_followup(followup)
+                if followup and self._check_time_remaining("technical_questions") > 60:
+                    self.speak(followup)
+                    self.wait_after_speaking(followup)
+                    followup_answer = self.listen()
+                    if followup_answer and len(followup_answer.split()) > 4:
+                        self.conversation_history.append({"role": "assistant", "content": followup})
+                        self.conversation_history.append({"role": "user", "content": followup_answer})
+
                 
                 break
 
-        if answer_received:
+        if answer_received and not self.just_repeated:
+            question_count += 1  # Increment only for original questions
             self.conversation_history.append({"role": "assistant", "content": question})
             self.conversation_history.append({"role": "user", "content": answer})
             self.just_repeated = False
@@ -578,7 +550,7 @@ class ExpertTechnicalInterviewer:
     def _conduct_question_phase(self, is_tech_interview):
         """Conduct the main question phase"""
         question_count = 0
-        max_questions = 10  # Adjusted based on time constraints
+        max_questions = 1  # Adjusted based on time constraints
         
         if is_tech_interview:
             self.speak("Let's start with some technical questions to understand your experience better.", interruptible=False)
@@ -1256,8 +1228,23 @@ Constraints: Preserve spaces between words, handle empty strings gracefully."""
             return None
 
         text_lower = text.lower()
-        domain_scores = {domain: 0 for domain in self.tech_domains}
+        
+        # First check for exact multi-word domain matches
+        domain_matches = {
+            "data science": "data science",
+            "machine learning": "machine learning",
+            "data scientist": "data science",
+            "ml engineer": "machine learning"
+        }
+        
+        for phrase, domain in domain_matches.items():
+            if phrase in text_lower:
+                print(f"[Domain Detection] Direct match found: {domain}")
+                return domain
 
+        # Then proceed with the regular scoring system
+        domain_scores = {domain: 0 for domain in self.tech_domains}
+        
         for domain, keywords in self.tech_domains.items():
             for keyword in keywords:
                 if keyword.lower() in text_lower:
@@ -1267,7 +1254,7 @@ Constraints: Preserve spaces between words, handle empty strings gracefully."""
 
         best_tech_domain, tech_score = max(domain_scores.items(), key=lambda x: x[1])
 
-        if tech_score >= 2:
+        if tech_score >= 1:  # Lowered threshold from 2 to 1
             print(f"[Domain Detection] Detected technical domain: {best_tech_domain}")
             return best_tech_domain
 
@@ -1282,17 +1269,11 @@ Constraints: Preserve spaces between words, handle empty strings gracefully."""
 
         best_non_tech_domain, non_tech_score = max(domain_scores.items(), key=lambda x: x[1])
 
-        if non_tech_score >= 2:
+        if non_tech_score >= 1:  # Lowered threshold from 2 to 1
             print(f"[Domain Detection] Detected non-technical domain: {best_non_tech_domain}")
             return best_non_tech_domain
 
-        # If ambiguous but tech keywords exist, fallback
-        fallback_keywords = ["pandas", "numpy", "machine learning", "tensorflow", "keras", "python", "scikit", "data pipeline", "model", "deployment"]
-        if any(kw in text_lower for kw in fallback_keywords):
-            print("[Domain Detection] Fallback to technical domain: data science")
-            return "data science"
-
-        print("[Domain Detection] No strong domain match found.")
+        print("[Domain Detection] No domain match found.")
         return None
 
     def _save_transcription_to_docx(self, file_path="interview_transcript.docx"):
@@ -1376,7 +1357,7 @@ Constraints: Preserve spaces between words, handle empty strings gracefully."""
             time.sleep(1)
 
 class RAGExpertTechnicalInterviewer(ExpertTechnicalInterviewer):
-    def __init__(self, model="gemini-1.5-flash", accent="indian"):
+    def __init__(self, model="gemini-2.0-flash", accent="indian"):
         super().__init__(model, accent)
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')  # Pre-trained embedding model
         self.knowledge_base_path = "knowledge_base.json"
@@ -1446,14 +1427,9 @@ class RAGExpertTechnicalInterviewer(ExpertTechnicalInterviewer):
 if __name__ == "__main__":
     try:
         # Example usage with client-provided questions
-        client_questions = [
-            "Can you explain your experience with microservices architecture?",
-            "How would you handle a situation where a production service goes down?",
-            "What's your approach to testing in a CI/CD pipeline?"
-        ]
+        client_questions = []
         
         interviewer = ExpertTechnicalInterviewer(
-            client_questions=client_questions,
             total_duration=80  # 80 minute interview
         )
         interviewer.start_interview()
