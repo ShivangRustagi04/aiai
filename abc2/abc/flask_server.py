@@ -70,6 +70,17 @@ def start_interview():
         'stage': 'greeting'
     })
 
+@app.route('/api/problems/random', methods=['GET'])
+def get_random_problem():
+    problems = [
+        "Write a function to reverse a string.",
+        "Find the factorial of a number using recursion.",
+        "Implement binary search on a sorted list."
+    ]
+    return jsonify({
+        "question": random.choice(problems)
+    })
+
 @app.route('/api/process-speech', methods=['POST'])
 def process_speech():
     global interviewer, interview_state
@@ -83,19 +94,74 @@ def process_speech():
     if not user_input:
         return jsonify({'error': 'No speech input provided'}), 400
 
+    # ✅ Force move to coding stage (manual trigger)
+    if user_input.lower() == "ready_for_coding":
+        interview_state['stage'] = 'coding_challenges'
+        interview_state['coding_questions_asked'] = 1
+        try:
+            coding_question = interviewer._generate_coding_question(
+                interview_state.get("current_domain", "python")
+            )
+            interview_state['current_question'] = coding_question
+            print(f"🧐 Generated coding question: {coding_question}")
+        except Exception as e:
+            print(f"Error generating coding question: {e}")
+            interview_state['current_question'] = "Write a function that takes a string and returns it reversed. For example, 'hello' should return 'olleh'."
+
+        return jsonify({
+            "response": "✅ Great! Now let's move to the coding challenge. Please use the code editor to solve the problem.",
+            "question": interview_state["current_question"],
+            "stage": interview_state["stage"]
+        })
+
+    # ✅ Handle code submission and transition to doubt clearing
+    if user_input.lower() == "done_coding":
+        try:
+            latest_code = interview_state.get("latest_code", "")
+            language = interview_state.get("language", "python")
+
+            if latest_code:
+                interviewer.submit_candidate_code(latest_code)
+
+            interview_state['stage'] = 'doubt_clearing'
+            response = "Thanks for your submission. Now let's move to any questions or clarifications you might have."
+            interview_state['active'] = True  # make sure interview stays active
+
+        # ✅ Launch doubt-clearing in separate thread
+            try:
+                import threading
+                threading.Thread(
+                    target=interviewer._conduct_doubt_clearing,
+                    args=(True,),  # False if professional interview
+                    daemon=True
+                ).start()
+            except Exception as e:
+                print(f"❌ Failed to launch doubt-clearing: {e}")
+
+        except Exception as e:
+            print(f"Code submission error: {e}")
+            response = "Thanks for submitting. Let's move to the next part of the interview."
+
+        try:
+            interviewer.speak(response, interruptible=False)
+        except Exception as e:
+            print(f"TTS error: {e}")
+
+        interview_state['conversation_history'].append({'role': 'assistant', 'content': response})
+
+        return jsonify({
+            'response': response,
+            'status': 'ok',
+            'stage': interview_state['stage'],
+            'questions_asked': interview_state['skill_questions_asked'],
+            'coding_challenges_asked': interview_state['coding_questions_asked']
+        })
+
     try:
         interview_state['conversation_history'].append({'role': 'user', 'content': user_input})
         response = ""
 
-        if user_input.lower() == "done_coding":
-            interview_state['stage'] = 'concluded'
-            interview_state['active'] = False
-            response = (
-                "🎉 Great job on the coding challenge! That concludes our interview. "
-                "Thank you for your time, and best of luck!"
-            )
-
-        elif interview_state['stage'] == 'greeting':
+        if interview_state['stage'] == 'greeting':
             interview_state['personal_info_collected'] = True
             interview_state['stage'] = 'tech_background'
             response = "Thanks for the intro! Tell me more about your technical background."
@@ -127,37 +193,22 @@ def process_speech():
                         question = "Can you explain how you'd improve performance in a SQL query?"
                     response = f"Good answer! Here's another question:\n\n{question}"
                 else:
-                    # Transition to coding challenges
                     interview_state['stage'] = 'coding_challenges'
                     interview_state['coding_questions_asked'] = 1
-                    interview_state['current_question'] = interviewer.current_coding_question
+                    try:
+                        coding_question = interviewer._generate_coding_question(
+                            interview_state.get("current_domain", "general")
+                        )
+                        interview_state['current_question'] = coding_question
+                        print(f"🧐 Auto-generated coding question: {coding_question}")
+                    except Exception as e:
+                        print(f"Error generating coding question: {e}")
+                        interview_state['current_question'] = "Write a function that takes a string and returns it reversed. For example, 'hello' should return 'olleh'."
+
                     response = (
                         "✅ You've done well with theory!\n\n"
                         "🧠 Please go to the code editor to demonstrate your coding skills."
                     )
-                    if user_input.lower() == "done_coding":
-                        interview_state['stage'] = 'concluded'
-                        interview_state['active'] = False
-                        response = (
-                            "🎉 Great job on the coding challenge! That concludes our interview. "
-                            "Thank you for your time, and best of luck!"
-                        )
-
-                        try:
-                            interviewer.speak(response, interruptible=False)
-                        except Exception as e:
-                            print(f"TTS error: {e}")
-
-                        interview_state['conversation_history'].append({'role': 'assistant', 'content': response})
-
-                        return jsonify({
-                            'response': response,
-                            'status': 'ended',
-                            'stage': interview_state['stage'],
-                            'questions_asked': interview_state['skill_questions_asked'],
-                            'coding_challenges_asked': interview_state['coding_questions_asked']
-                        })
-
 
         elif interview_state['stage'] == 'coding_challenges':
             if interview_state['coding_questions_asked'] == 1:
@@ -169,24 +220,22 @@ def process_speech():
         elif interview_state['stage'] == 'concluded':
             response = "📌 The interview has already ended. Thank you!"
 
-        try:
-            interviewer.speak(response, interruptible=False)
-        except Exception as e:
-            print(f"TTS error: {e}")
-
-        interview_state['conversation_history'].append({'role': 'assistant', 'content': response})
-
-        return jsonify({
-            'response': response,
-            'status': 'ended' if interview_state['stage'] == 'concluded' else 'ok',
-            'stage': interview_state['stage'],
-            'questions_asked': interview_state['skill_questions_asked'],
-            'coding_challenges_asked': interview_state['coding_questions_asked']
-        })
+        interviewer.speak(response, interruptible=False)
 
     except Exception as e:
         print(f"Error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        response = "⚠️ Something went wrong, but let's continue."
+
+    interview_state['conversation_history'].append({'role': 'assistant', 'content': response})
+
+    return jsonify({
+        'response': response,
+        'status': 'ok',
+        'stage': interview_state['stage'],
+        'questions_asked': interview_state['skill_questions_asked'],
+        'coding_challenges_asked': interview_state['coding_questions_asked'],
+        'current_question': interview_state.get('current_question')
+    })
 
 
 @app.route('/api/interview-status', methods=['GET'])
@@ -197,9 +246,10 @@ def get_interview_status():
         'stage': interview_state['stage'],
         'skill_questions_asked': interview_state['skill_questions_asked'],
         'coding_questions_asked': interview_state['coding_questions_asked'],
-        'total_skill_questions': 3,  # Fixed: Changed from 7 to 3
+        'total_skill_questions': 3,
         'total_coding_questions': 2,
-        'current_domain': interview_state.get('current_domain', 'unknown')
+        'current_domain': interview_state.get('current_domain', 'unknown'),
+        'current_question': interview_state.get('current_question')
     })
 
 @app.route('/api/end-interview', methods=['POST'])
@@ -223,8 +273,20 @@ def get_current_coding_question():
             'error': f'Not in coding stage. Current stage: {interview_state["stage"]}'
         }), 400
     
+    current_question = interview_state.get('current_question')
+    if not current_question:
+        # Generate a fallback question if none exists
+        try:
+            current_question = interviewer._generate_coding_question(
+                interview_state.get("current_domain", "python")
+            )
+            interview_state['current_question'] = current_question
+        except:
+            current_question = "Write a function that takes a string and returns it reversed. For example, 'hello' should return 'olleh'."
+            interview_state['current_question'] = current_question
+    
     return jsonify({
-        'question': interview_state.get('current_question', 'No coding question assigned yet.'),
+        'question': current_question,
         'stage': interview_state['stage'],
         'coding_questions_asked': interview_state['coding_questions_asked']
     })
@@ -233,10 +295,24 @@ def get_current_coding_question():
 def submit_code():
     data = request.get_json()
     user_code = data.get("code", "")
-    language = data.get("language", "python")  # Optional
+    language = data.get("language", "python")
 
-    # Call evaluation logic
-    success, output, followup = evaluate_code_and_respond(user_code, language)
+    # Save code and language in global state
+    interview_state['latest_code'] = user_code
+    interview_state['language'] = language
+
+    try:
+        # 🔧 Run code using backend method (safe execution)
+        output = interviewer._execute_code(language, user_code)
+
+        # 🤖 Generate follow-up question using Gemini
+        followup = interviewer._coding_followup(user_code, language)
+
+        success = True
+    except Exception as e:
+        output = ""
+        followup = f"❌ Error while running code: {str(e)}"
+        success = False
 
     return jsonify({
         "success": success,
@@ -244,28 +320,18 @@ def submit_code():
         "followup_question": followup
     })
 
-def evaluate_code_and_respond(code: str, language: str):
+
+@app.route("/api/generate-coding-question", methods=["POST"])
+def api_generate_coding_question():
+    data = request.get_json()
+    domain = data.get("domain", "python")
+    session_id = data.get("session_id", "default")
+
     try:
-        # Only for Python code execution (unsafe in production!)
-        # Redirect stdout to capture print output
-        import io
-        import contextlib
-
-        buffer = io.StringIO()
-        with contextlib.redirect_stdout(buffer):
-            exec(code, {}, {})  # Execute in empty namespace
-
-        printed_output = buffer.getvalue().strip()
-        expected_output = "Hello, World!"
-
-        if expected_output in printed_output:
-            followup = "✅ Great! Now modify the function to take a name and print 'Hello, <name>!'"
-            return True, printed_output, followup
-        else:
-            return False, printed_output, "⚠️ Try printing exactly 'Hello, World!'."
-
+        question = interviewer._generate_coding_question(domain)
+        return jsonify({"question": question})
     except Exception as e:
-        return False, "", f"❌ Error during execution: {str(e)}"
+        return jsonify({"error": str(e)}), 500
 
 # Debug endpoint to check interview state
 @app.route('/api/debug-state', methods=['GET'])
