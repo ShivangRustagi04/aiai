@@ -241,27 +241,110 @@ class ExpertTechnicalInterviewer:
             "C++": ".cpp",
             "JavaScript": ".js"
         }.get(language, ".txt")
-
-    def _generate_domain_question(self, domain, experience_level="mid"):
-        if domain not in self.tech_domains and domain not in self.non_tech_domains:
-            domain = "python"  # Default fallback
-            
-        is_tech = domain in self.tech_domains
-        domain_info = self.tech_domains.get(domain) or self.non_tech_domains.get(domain)
+    def _get_fallback_question(self, domain, difficulty):
+        """Fallback questions by difficulty level"""
+        fallbacks = {
+            "easy": {
+                "frontend": "Explain how React's virtual DOM works and why it's beneficial.",
+                "backend": "What are REST APIs and can you explain the main HTTP methods?",
+                "python": "How would you write a function to count word occurrences in a string?",
+                "default": "Can you explain the basic architecture of a typical [domain] application?"
+            },
+            "medium": {
+                "frontend": "How would you optimize a React component that's re-rendering too frequently?",
+                "backend": "How would you design an API rate limiting system?",
+                "python": "How would you implement a memory-efficient data processing pipeline?",
+                "default": "What are some common challenges in [domain] and how would you address them?"
+            },
+            "hard": {
+                "frontend": "How would you design a micro-frontend architecture with shared state management?",
+                "backend": "How would you design a distributed caching system for a high-traffic API?",
+                "python": "How would you implement a thread-safe caching decorator with TTL?",
+                "default": "How would you architect a scalable [domain] system for enterprise use?"
+            }
+        }
         
-        if not domain_info:
-            return "Can you describe your experience with this technology?"
+        return fallbacks.get(difficulty, {}).get(domain, fallbacks[difficulty]["default"])
+
+    def _get_fallback_coding_question(self, domain, difficulty):
+        """Fallback coding questions by difficulty level"""
+        fallbacks = {
+            "easy": {
+                "frontend": """Problem: Implement a button counter component in React that increments on click.
+                
+    Example Input: User clicks button 3 times
+    Example Output: Display shows "Count: 3"
+
+    Constraints: Use React hooks""",
+                "python": """Problem: Write a function to check if a string is a palindrome.
+
+    Example Input: "racecar"
+    Example Output: True
+
+    Constraints: Case insensitive, ignore spaces"""
+            },
+            "medium": {
+                "frontend": """Problem: Create a React form with validation for email and password fields.
+                
+    Example Input: User enters invalid email
+    Example Output: Display error message
+
+    Constraints: Validate email format, password length >= 8""",
+                "python": """Problem: Write a function to flatten a nested dictionary.
+
+    Example Input: {'a': 1, 'b': {'c': 2, 'd': 3}}
+    Example Output: {'a': 1, 'b.c': 2, 'b.d': 3}
+
+    Constraints: Handle arbitrary nesting levels"""
+            },
+            "hard": {
+                "frontend": """Problem: Implement a debounce hook in React that can be reused across components.
+
+    Example Input: User types quickly in search field
+    Example Output: API call made only after 500ms pause
+
+    Constraints: TypeScript, generic implementation""",
+                "python": """Problem: Implement a thread-safe LRU cache with TTL expiration.
+
+    Example Input: Cache with size=3, TTL=60s
+    Example Output: Evicts least recently used items after size/ttl exceeded
+
+    Constraints: Thread-safe, O(1) operations"""
+            }
+        }
+        
+        return fallbacks.get(difficulty, {}).get(domain, """Problem: Write a function to reverse a string.
+
+    Example Input: "hello"
+    Example Output: "olleh"
+
+    Constraints: Do not use built-in reverse functions""")
+
+    def _generate_domain_question(self, domain):
+        """Generate a domain question based on experience level"""
+        if not hasattr(self, 'years_experience'):
+            self.years_experience = 0
             
-        prompt = f"""Generate one interview question about {domain}.
+        # Determine difficulty based on experience
+        if self.years_experience <= 3:
+            difficulty = "easy"
+            level_desc = "fundamental"
+        elif 4 <= self.years_experience <= 7:
+            difficulty = "medium" 
+            level_desc = "intermediate"
+        else:
+            difficulty = "hard"
+            level_desc = "advanced"
+            
+        prompt = f"""Generate one {difficulty} level interview question about {domain} 
+        suitable for someone with {self.years_experience} years of experience.
         
         The question should:
-        - Test practical, real-world knowledge
-        - Be clear and concise (1-2 sentences max)
+        - Test practical, real-world knowledge at {level_desc} level
+        - Be clear and concise (1-2 sentences max)  
         - Relate to actual work scenarios
         - Be specific enough to evaluate depth of knowledge
         - Be answerable in 2-3 minutes
-        
-        Suggested topics: {', '.join(domain_info)}
         
         Return only the question, no additional text."""
         
@@ -270,16 +353,42 @@ class ExpertTechnicalInterviewer:
             return question.strip() if question else None
         except Exception as e:
             print(f"Error generating domain question: {e}")
-            fallbacks = {
-                "frontend": "How would you optimize a React component that's rendering too slowly?",
-                "backend": "How would you design a REST API for a social media post feature?",
-                "AI": "What metrics would you use to evaluate a machine learning model's performance?",
-                "data science": "How would you handle missing values in a dataset?",
-                "devops": "How would you troubleshoot a production service that's running slowly?",
-                "python": "How would you implement a memory-efficient data processing pipeline in Python?",
-                "default": "Can you walk me through your approach to solving [domain-related problem]?"
-            }
-            return fallbacks.get(domain, fallbacks["default"])
+            return self._get_fallback_question(domain, difficulty)
+
+    def _generate_coding_question(self, domain):
+        """Generate coding question based on experience level"""
+        if not hasattr(self, 'years_experience'):
+            self.years_experience = 0
+            
+        if self.years_experience <= 3:
+            difficulty = "easy"
+        elif 4 <= self.years_experience <= 7:
+            difficulty = "medium"
+        else:
+            difficulty = "hard"
+            
+        prompt = f"""Generate a {difficulty} level coding problem in {domain} 
+        suitable for someone with {self.years_experience} years of experience.
+        
+        Requirements:
+        - Should be solvable in 10-15 minutes
+        - Include clear problem statement
+        - Provide input/output examples
+        - Test algorithmic thinking
+        - Match {difficulty} difficulty level
+        
+        Format as:
+        Problem: [statement]
+        Example Input: [sample] 
+        Example Output: [expected]
+        Constraints: [any constraints]"""
+        
+        try:
+            response = self.query_gemini(prompt)
+            return response.strip() if response else None
+        except Exception as e:
+            print(f"Error generating coding question: {e}")
+            return self._get_fallback_coding_question(domain, difficulty)
 
 
     def _get_filler_phrase(self):
@@ -398,9 +507,39 @@ class ExpertTechnicalInterviewer:
             self.conversation_history.append({"role": "user", "content": introduction})
             self.current_domain = self._identify_tech_domain(introduction)
 
+    def _extract_years_experience(self, text):
+        """Extract years of experience from text response"""
+        if not text:
+            return 0
+            
+        # Look for patterns like "5 years", "3+ years", "ten years" etc.
+        match = re.search(r'(\d+)\s*\+?\s*(?:years|yrs|year)', text)
+        if match:
+            return int(match.group(1))
+            
+        # Try to parse written numbers
+        number_words = {
+            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+        }
+        for word, num in number_words.items():
+            if word in text.lower():
+                return num
+                
+        return 0  # Default if no experience found
+
     def _gather_background(self):
         """Gather candidate background information (7 minutes)"""
         is_tech_interview = self.current_domain in self.tech_domains
+
+        # First ask about years of experience
+        msg = "Could you tell me how many years of professional experience you have in this field?"
+        self.speak(msg, interruptible=False)
+        self.wait_after_speaking(msg)
+        experience_response = self.listen()
+        
+        # Extract years of experience from response
+        self.years_experience = self._extract_years_experience(experience_response)
 
         if is_tech_interview:
             msg = "Nice to meet you! Now, I'd love to hear about your technical background and the technologies you enjoy working with."
@@ -709,81 +848,6 @@ class ExpertTechnicalInterviewer:
             if not self.interview_active:
                 break
             time.sleep(1)
-
-    def _generate_coding_question(self, domain, difficulty="medium"):
-        """Generate a coding question based on the candidate's domain"""
-        domain_mapping = {
-            "python": "Python",
-            "java": "Java", 
-            "cpp": "C++",
-            "frontend": "JavaScript",
-            "backend": "Python or your preferred language",
-            "AI": "Python",
-            "data science": "Python",
-            "machine learning": "Python"
-        }
-        
-        language = domain_mapping.get(domain, "Python")
-        
-        prompt = f"""Generate a {difficulty} level coding problem suitable for a technical interview in {domain}.
-        
-        Requirements:
-        - Should be solvable in {language}
-        - Should take 10-15 minutes to solve
-        - Include a clear problem statement
-        - Provide input/output examples
-        - Should test algorithmic thinking and {domain} knowledge
-        - Avoid problems that are too easy or too hard
-        - Focus on practical problem-solving skills
-        
-        Format your response as:
-        Problem: [Clear problem statement]
-        
-        Example Input: [Sample input]
-        Example Output: [Expected output]
-        
-        Constraints: [Any constraints or edge cases to consider]
-        
-        Generate only the problem, no solution."""
-        
-        try:
-            response = self.query_gemini(prompt)
-            return response.strip() if response else None
-        except Exception as e:
-            print(f"Error generating coding question: {e}")
-            return self._get_fallback_coding_question(domain)
-
-    def _get_fallback_coding_question(self, domain):
-        """Fallback coding questions if AI generation fails"""
-        fallback_questions = {
-            "frontend": """Problem: Implement a React component that fetches and displays user data from an API endpoint.
-
-Example Input: API returns {"users": [{"id": 1, "name": "John"}, {"id": 2, "name": "Jane"}]}
-Example Output: Display list of users with their names
-
-Constraints: Handle loading and error states properly""",
-            
-            "backend": """Problem: Write a function to validate a password meets these requirements:
-- At least 8 characters
-- Contains at least one uppercase letter
-- Contains at least one number
-- Contains at least one special character
-
-Example Input: "Password123!"
-Example Output: true
-
-Example Input: "weak"
-Example Output: false""",
-            
-            "default": """Problem: Write a function to reverse words in a sentence while keeping the word order.
-
-Example Input: "Hello World Python"
-Example Output: "olleH dlroW nohtyP"
-
-Constraints: Preserve spaces between words, handle empty strings gracefully."""
-        }
-        
-        return fallback_questions.get(domain, fallback_questions["default"])
 
     def _coding_followup(self, code, language):
         """Ask follow-up questions about the code submitted by the candidate."""
