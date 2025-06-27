@@ -123,13 +123,13 @@ class ExpertTechnicalInterviewer:
             # Start monitoring threads
             self.monitoring_active = True
             self.last_question = None
-            self.face_monitor_thread = threading.Thread(target=self._monitor_face_and_attention)
-            self.face_monitor_thread.daemon = True
-            self.face_monitor_thread.start()
+            #self.face_monitor_thread = threading.Thread(target=self._monitor_face_and_attention)
+           # self.face_monitor_thread.daemon = True
+            #self.face_monitor_thread.start()
             
-            self.tab_monitor_thread = threading.Thread(target=self._monitor_tab_changes)
-            self.tab_monitor_thread.daemon = True
-            self.tab_monitor_thread.start()
+            #self.tab_monitor_thread = threading.Thread(target=self._monitor_tab_changes)
+            #self.tab_monitor_thread.daemon = True
+            #self.tab_monitor_thread.start()
 
         except Exception as e:
             print(f"Initialization error: {e}")
