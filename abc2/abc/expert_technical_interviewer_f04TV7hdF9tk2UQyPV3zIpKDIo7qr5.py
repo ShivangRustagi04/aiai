@@ -901,68 +901,6 @@ Constraints: Preserve spaces between words, handle empty strings gracefully."""
             self.cap.release()
             self.camera_active = False
 
-    def _monitor_face_and_attention(self):    
-        multiple_faces_warning_given = False
-        looking_away_warning_given = False
-        
-        while self.monitoring_active and self.interview_active:
-                if not self.camera_active or not self.cap:
-                    time.sleep(2)
-                    continue
-                    
-                with threading.Lock():  # Add thread safety
-                    ret, frame = self.cap.read()
-                    if not ret:
-                        self._restart_camera()
-                        continue
-                    
-                # Convert to grayscale de apply histogram equalization
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                gray = cv2.equalizeHist(gray)
-                
-                # More accurate face detection parameters
-                faces = self.face_cascade.detectMultiScale(
-                    gray,
-                    scaleFactor=1.05,  # Reduced from 1.1
-                    minNeighbors=7,    # Increased from 5
-                    minSize=(150, 150),# Increased minimum face size
-                    flags=cv2.CASCADE_SCALE_IMAGE
-                )
-                
-                # Only trigger warning if we're very confident
-                if len(faces) > 1:
-                    # Additional verification - check face sizes are similar
-                    areas = [w*h for (x,y,w,h) in faces]
-                    if max(areas)/min(areas) < 4:  # Only if faces are similarly sized
-                        if not multiple_faces_warning_given:
-                            self._handle_cheating_attempt("multiple_faces")
-                            multiple_faces_warning_given = True
-                    else:
-                        multiple_faces_warning_given = False
-                else:
-                    multiple_faces_warning_given = False
-                        
-                # Eye detection and attention check
-                for (x, y, w, h) in faces:
-                    roi_gray = gray[y:y+h, x:x+w]
-                    eyes = self.eye_cascade.detectMultiScale(
-                        roi_gray,
-                        scaleFactor=1.1,
-                        minNeighbors=3,
-                        minSize=(30, 30))
-                    
-                    # Only check attention if we have good eye detection
-                    if len(eyes) >= 2:  # At least two eyes detected
-                        eye_centers = [(ex + ew/2, ey + eh/2) for (ex, ey, ew, eh) in eyes]
-                        avg_eye_y = sum(ey for (ex, ey) in eye_centers) / len(eye_centers)
-                        
-                        # More lenient threshold for looking away
-                        if avg_eye_y > h * 0.75 and not looking_away_warning_given:  # Eyes looking down
-                            self._handle_cheating_attempt("looking_away")
-                            looking_away_warning_given = True
-                        elif avg_eye_y <= h * 0.75:
-                            looking_away_warning_given = False
-
     def _restart_camera(self):
         try:
             if self.cap:
@@ -1023,9 +961,6 @@ Constraints: Preserve spaces between words, handle empty strings gracefully."""
             return
             
         responses = {
-            "no_face": "Please ensure your face is clearly visible to the camera for the interview.",
-            "multiple_faces": "I notice multiple people in the frame. Please ensure you're alone during this interview.",
-            "looking_away": "Please maintain focus on the interview and avoid looking at other devices.",
             "tab_change": "Please stay focused on the interview window and avoid switching to other applications."
         }
         
