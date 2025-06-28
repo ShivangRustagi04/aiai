@@ -1,198 +1,444 @@
 "use client"
+import { useState, useEffect, useRef } from "react"
+import { Mic, MicOff, PhoneOff, Code, Camera, CameraOff, Users, AlertCircle } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import CodeEditor from "@/components/code-editor"
+import AIInterviewerAvatar from "@/components/ai-interviewer-avatar"
 
-import { useState, useEffect } from "react"
-import { Card } from "@/components/ui/card"
+export default function GoogleMeetInterview() {
+  const [isMuted, setIsMuted] = useState(false)
+  const [isVideoOff, setIsVideoOff] = useState(false)
+  const [isAISpeaking, setIsAISpeaking] = useState(false)
+  const [selectedLanguage, setSelectedLanguage] = useState("JavaScript")
+  const [interviewStarted, setInterviewStarted] = useState(false)
+  const [showCodeEditor, setShowCodeEditor] = useState(false)
+  const [code, setCode] = useState("// Write your code here...")
+  const [output, setOutput] = useState("")
+  const [isSubmitted, setIsSubmitted] = useState(false)
+  const [question, setQuestion] = useState("")
+  const [warnings, setWarnings] = useState<string[]>([])
+  const [interviewStatus, setInterviewStatus] = useState({
+    active: false,
+    stage: 'not_started',
+    skill_questions_asked: 0,
+    coding_questions_asked: 0,
+    current_domain: 'unknown',
+    current_question: null
+  })
 
-interface AIInterviewerAvatarProps {
-  isListening: boolean
-  isSpeaking: boolean
-  currentMessage?: string
-  showVoiceActivity?: boolean
+  const videoRef = useRef(null)
+
+  // Fetch interview status every 3 seconds
+  const fetchInterviewStatus = async () => {
+    try {
+      const res = await fetch("http://localhost:5000/api/interview-status")
+      const data = await res.json()
+      console.log("📊 Interview Status:", data)
+      setInterviewStatus(data)
+      
+      // Auto-transition to code editor if backend moved to coding stage
+      if (data.stage === 'coding_challenges' && !showCodeEditor && data.current_question) {
+        console.log("🚀 Auto-opening code editor with question:", data.current_question)
+        setQuestion(data.current_question)
+        setShowCodeEditor(true)
+      }
+    } catch (error) {
+      console.error("Failed to fetch interview status:", error)
+    }
+  }
+
+  // Fetch coding question
+  const fetchCodingQuestion = async () => {
+    try {
+      const res = await fetch("http://localhost:5000/api/current-coding-question")
+      const data = await res.json()
+      console.log("📝 Coding Question Response:", data)
+      
+      if (data.question && !data.error) {
+        setQuestion(data.question)
+        return data.question
+      } else {
+        console.warn("No question received:", data.error)
+        return null
+      }
+    } catch (error) {
+      console.error("Error fetching coding question:", error)
+      return null
+    }
+  }
+
+  // Handle clicking on Code Editor button
+  const handleCodeEditorClick = async () => {
+    try {
+      console.log("🔵 Code Editor button clicked")
+      console.log("Current interview status:", interviewStatus)
+
+      // Check if we're already in coding stage
+      if (interviewStatus.stage === 'coding_challenges') {
+        console.log("✅ Already in coding stage, fetching question...")
+        const fetchedQuestion = await fetchCodingQuestion()
+        if (fetchedQuestion) {
+          setQuestion(fetchedQuestion)
+          setShowCodeEditor(true)
+        } else {
+          alert("⚠️ No coding question available. Please wait or try again.")
+        }
+        return
+      }
+
+      // If not in coding stage, try to trigger transition
+      console.log("🚀 Triggering transition to coding stage...")
+      const triggerRes = await fetch("http://localhost:5000/api/process-speech", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "ready_for_coding" }),
+      })
+      
+      const triggerData = await triggerRes.json()
+      console.log("🧠 Backend response to ready_for_coding:", triggerData)
+
+      if (triggerData.question) {
+        setQuestion(triggerData.question)
+        setShowCodeEditor(true)
+        // Update local status immediately
+        setInterviewStatus(prev => ({
+          ...prev,
+          stage: 'coding_challenges',
+          current_question: triggerData.question
+        }))
+      } else {
+        // Wait a moment and fetch status
+        setTimeout(async () => {
+          await fetchInterviewStatus()
+          const fetchedQuestion = await fetchCodingQuestion()
+          if (fetchedQuestion) {
+            setQuestion(fetchedQuestion)
+            setShowCodeEditor(true)
+          }
+        }, 1000)
+      }
+
+    } catch (err) {
+      console.error("❌ Error during code editor activation:", err)
+      alert("Something went wrong while switching to coding. Check backend.")
+    }
+  }
+
+  // Toggle Mute
+  const toggleMute = () => setIsMuted(!isMuted)
+
+  // Toggle Video
+  const toggleVideo = () => setIsVideoOff(!isVideoOff)
+
+  // End Call
+  const handleEndCall = () => {
+    setInterviewStarted(false)
+    if (videoRef.current && videoRef.current.srcObject) {
+      const tracks = videoRef.current.srcObject.getTracks()
+      tracks.forEach(track => track.stop())
+    }
+  }
+
+  // Start Interview
+  useEffect(() => {
+    if (interviewStarted && !showCodeEditor) {
+      fetch("http://localhost:5000/api/start-interview", { method: "POST" })
+        .then(res => res.json())
+        .then(data => {
+          if (data?.message) console.log("Interview started:", data.message)
+          fetchInterviewStatus()
+        })
+        .catch(() => console.error("❌ Failed to start interview"))
+    }
+  }, [interviewStarted])
+
+  // Start camera feed
+  useEffect(() => {
+    if (interviewStarted && !isVideoOff) {
+      navigator.mediaDevices
+        .getUserMedia({ video: true, audio: true })
+        .then((stream) => {
+          if (videoRef.current) videoRef.current.srcObject = stream
+        })
+        .catch((err) => console.log("Camera access denied:", err))
+    }
+  }, [interviewStarted, isVideoOff])
+
+  // Re-init camera when returning from IDE
+  useEffect(() => {
+    if (interviewStarted && !showCodeEditor && !isVideoOff) {
+      navigator.mediaDevices
+        .getUserMedia({ video: true, audio: true })
+        .then((stream) => {
+          if (videoRef.current) videoRef.current.srcObject = stream
+        })
+        .catch((err) => console.error("Failed to re-init camera after code editor:", err))
+    }
+  }, [showCodeEditor])
+
+  // Listen to user speech
+  const listenToUser = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognition) return alert("Speech recognition not supported")
+
+    const recognition = new SpeechRecognition()
+    recognition.lang = "en-US"
+    recognition.interimResults = false
+    recognition.maxAlternatives = 1
+
+    recognition.onresult = async (event) => {
+      const transcript = event.results[0][0].transcript
+      console.log("User said:", transcript)
+
+      const res = await fetch("http://localhost:5000/api/process-speech", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: transcript }),
+      })
+
+      const data = await res.json()
+      console.log("Backend replied:", data)
+
+      fetchInterviewStatus()
+    }
+
+    recognition.onerror = (event) => console.error("Speech error:", event.error)
+    recognition.start()
+  }
+
+  const runCode = async () => {
+  setOutput("⚙️ Running code...")
+
+  try {
+    const res = await fetch("http://localhost:5000/api/submit-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code,
+        language: selectedLanguage
+      })
+    })
+
+    const data = await res.json()
+    setOutput(data.output || "✅ Code ran successfully.")
+
+  } catch (err) {
+    console.error("❌ Code run error:", err)
+    setOutput("❌ Failed to run code. Check console.")
+  }
 }
 
-export default function AIInterviewerAvatar({
-  isListening,
-  isSpeaking,
-  currentMessage,
-  showVoiceActivity = true,
-}: AIInterviewerAvatarProps) {
-  const [pulse, setPulse] = useState(0)
-  const [eyeAnimation, setEyeAnimation] = useState({ x: 0, y: 0 })
 
-  useEffect(() => {
-    if (isSpeaking || isListening) {
-      const interval = setInterval(() => {
-        const randomFactor = isSpeaking ? 0.8 : 0.3
-        setPulse(Math.random() * randomFactor + 0.2)
-      }, 150)
-      return () => clearInterval(interval)
-    } else {
-      setPulse(0)
-    }
-  }, [isSpeaking, isListening])
+  // Submit code to backend
+  const submitCode = async () => {
+  setIsSubmitted(true)
+  setOutput("🚀 Submitting code...")
 
-  // Eye movement animation
-  useEffect(() => {
-    const eyeInterval = setInterval(() => {
-      if (!isSpeaking && !isListening) {
-        setEyeAnimation({
-          x: (Math.random() - 0.5) * 4,
-          y: (Math.random() - 0.5) * 2
-        })
-      } else {
-        setEyeAnimation({ x: 0, y: 0 })
-      }
-    }, 2000)
+  try {
+    const res = await fetch("http://localhost:5000/api/submit-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code,
+        language: selectedLanguage
+      })
+    })
+
+    const data = await res.json()
+    console.log("📦 Backend evaluation:", data)
+
+    const finalOutput = data.output || "✅ Code submitted successfully"
+    setOutput(finalOutput)
+
     
-    return () => clearInterval(eyeInterval)
-  }, [isSpeaking, isListening])
+
+    // Now inform backend to continue the interview
+    await fetch("http://localhost:5000/api/process-speech", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "done_coding" }),
+    })
+
+    setShowCodeEditor(false)
+
+  } catch (err) {
+    console.error("❌ Code submission error:", err)
+    setOutput("❌ Submission failed. Check console.")
+  }
+}
+
+
+  // Poll interview status
+  useEffect(() => {
+    if (interviewStarted) {
+      const interval = setInterval(fetchInterviewStatus, 3000)
+      return () => clearInterval(interval)
+    }
+  }, [interviewStarted])
+
+  // Poll tab/camera warnings
+  useEffect(() => {
+    const pollWarnings = () => {
+      fetch("http://localhost:5000/api/interview-warnings")
+        .then(res => res.json())
+        .then(data => {
+          if (data?.warnings) setWarnings(data.warnings)
+        })
+        .catch(() => { })
+    }
+    const interval = setInterval(pollWarnings, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Debug logging for status changes
+  useEffect(() => {
+    console.log("🔄 Interview Status Changed:", interviewStatus)
+  }, [interviewStatus])
+
+  if (!interviewStarted) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-gray-900 text-white">
+        <Button
+          onClick={() => setInterviewStarted(true)}
+          className="absolute top-4 right-4 bg-blue-600 hover:bg-blue-700"
+        >
+          Start Interview
+        </Button>
+        <h1 className="text-2xl font-bold mb-4">Welcome to the AI Interview</h1>
+        <p className="text-gray-400">Click the button above to begin.</p>
+      </div>
+    )
+  }
+
+  if (showCodeEditor) {
+    return (
+      <div className="h-screen bg-gray-900 text-white p-4">
+        <CodeEditor
+          code={code}
+          language={selectedLanguage}
+          onChange={setCode}
+          onLanguageChange={setSelectedLanguage}
+          onRun={runCode}
+          onSubmit={submitCode}
+          output={output}
+          isSubmitted={isSubmitted}
+          question={question}
+          videoRef={videoRef} 
+          isVideoOff={isVideoOff}
+          isMuted={isMuted}
+          isAISpeaking={isAISpeaking}
+          isAIListening={!isAISpeaking}
+        />
+      </div>
+    )
+  }
 
   return (
-    <Card className="relative h-full w-full flex items-center justify-center bg-gradient-to-br from-indigo-50 to-blue-50 border-0 shadow-2xl overflow-hidden">
-      {/* Ambient glow */}
-      <div
-        className="absolute rounded-full transition-all duration-500 ease-out"
-        style={{
-          width: `${200 + pulse * 20}px`,
-          height: `${200 + pulse * 20}px`,
-          background: isSpeaking
-            ? 'radial-gradient(circle, rgba(34,197,94,0.1) 0%, rgba(34,197,94,0.05) 40%, transparent 70%)'
-            : isListening
-            ? 'radial-gradient(circle, rgba(59,130,246,0.1) 0%, rgba(59,130,246,0.05) 40%, transparent 70%)'
-            : 'radial-gradient(circle, rgba(100,116,139,0.05) 0%, transparent 70%)',
-        }}
-      />
+    <div className="flex flex-col h-screen bg-gray-900">
+      {warnings.length > 0 && (
+        <div className="bg-red-900 text-red-300 p-2 text-sm flex items-center space-x-2 justify-center">
+          <AlertCircle className="w-4 h-4" />
+          <span>{warnings[warnings.length - 1]}</span>
+        </div>
+      )}
 
-      {/* Main Avatar Container */}
-      <div
-        className={`relative transition-all duration-300 ease-out`}
-        style={{
-          transform: `scale(${1 + pulse * 0.03})`,
-        }}
-      >
-        {/* Outer ring */}
-        <div
-          className={`absolute inset-0 rounded-full transition-all duration-300
-            ${isSpeaking ? 'ring-4 ring-green-400/40 shadow-lg shadow-green-400/20' : 
-              isListening ? 'ring-4 ring-blue-400/40 shadow-lg shadow-blue-400/20' : 
-              'ring-2 ring-slate-300/50'}`}
-          style={{
-            width: '160px',
-            height: '160px',
-            top: '-12px',
-            left: '-12px'
-          }}
-        />
-
-        {/* Avatar Circle */}
-        <div className="relative w-36 h-36 rounded-full bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-600 shadow-xl flex items-center justify-center overflow-hidden">
-          
-          {/* Background pattern */}
-          <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent" />
-          
-          {/* Character G */}
-          <div className="relative z-10">
-            <div 
-              className="text-6xl font-bold text-white drop-shadow-lg transition-all duration-300"
-              style={{
-                transform: `translate(${eyeAnimation.x}px, ${eyeAnimation.y}px)`,
-                fontFamily: 'system-ui, -apple-system, sans-serif'
-              }}
-            >
-              G
-            </div>
-          </div>
-
-          {/* Animated elements */}
-          {isSpeaking && (
-            <>
-              {/* Speaking ripples */}
-              <div className="absolute inset-0 rounded-full border-2 border-white/30 animate-ping" 
-                   style={{ animationDuration: '1s' }} />
-              <div className="absolute inset-2 rounded-full border border-white/20 animate-ping" 
-                   style={{ animationDuration: '1.5s', animationDelay: '0.5s' }} />
-            </>
-          )}
-
-          {isListening && (
-            <>
-              {/* Listening dots around the avatar */}
-              <div className="absolute top-4 right-8">
-                <div className="flex space-x-1">
-                  {[0, 1, 2].map((i) => (
-                    <div
-                      key={i}
-                      className="w-2 h-2 bg-white/80 rounded-full animate-bounce"
-                      style={{ 
-                        animationDelay: `${i * 0.2}s`,
-                        animationDuration: '1s'
-                      }}
-                    />
-                  ))}
-                </div>
+      <div className="flex-1 relative bg-black overflow-hidden">
+        <div className="h-full grid grid-cols-2 gap-2 p-4">
+          {/* Local Video Feed */}
+          <div className="relative bg-gray-800 rounded-lg overflow-hidden">
+            {isVideoOff ? (
+              <div className="w-full h-full bg-gray-700 flex items-center justify-center">
+                <CameraOff className="w-16 h-16 text-gray-400" />
+                <span className="text-gray-300">Camera is off</span>
               </div>
-            </>
-          )}
-
-          {/* Subtle breathing animation when idle */}
-          {!isSpeaking && !isListening && (
-            <div className="absolute inset-0 rounded-full bg-gradient-to-r from-transparent via-white/5 to-transparent animate-pulse" />
-          )}
-        </div>
-      </div>
-
-      {/* Status indicator */}
-      <div className="absolute top-6 left-6">
-        <div className={`flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-medium backdrop-blur-md border transition-all duration-300
-          ${isSpeaking ? 'bg-green-500/20 border-green-400/30 text-green-700' : 
-            isListening ? 'bg-blue-500/20 border-blue-400/30 text-blue-700' : 
-            'bg-slate-500/20 border-slate-400/30 text-slate-600'}`}>
-          
-          <div className={`w-2 h-2 rounded-full transition-all duration-300
-            ${isSpeaking ? 'bg-green-500 animate-pulse' : 
-              isListening ? 'bg-blue-500 animate-pulse' : 
-              'bg-slate-400'}`} />
-          
-          <span>
-            {isSpeaking ? 'Speaking' : isListening ? 'Listening' : 'Ready'}
-          </span>
-        </div>
-      </div>
-
-      {/* Voice activity bars */}
-      {showVoiceActivity && (isSpeaking || isListening) && (
-        <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2">
-          <div className="flex items-end space-x-1">
-            {[...Array(5)].map((_, i) => (
-              <div
-                key={i}
-                className={`w-1 rounded-full transition-all duration-150
-                  ${isSpeaking ? 'bg-green-400' : 'bg-blue-400'}`}
-                style={{
-                  height: `${8 + Math.sin((Date.now() / 200) + i) * (pulse * 12 + 4)}px`,
-                  opacity: 0.6 + pulse * 0.4
-                }}
+            ) : (
+              <video
+                ref={videoRef}
+                autoPlay
+                muted
+                playsInline
+                className="w-full h-full object-cover"
               />
-            ))}
+            )}
+            <div className="absolute bottom-4 left-4 bg-black/50 rounded-full px-3 py-1">
+              <span className="text-white text-sm font-medium">You</span>
+            </div>
+            {isMuted && (
+              <div className="absolute top-4 left-4 bg-red-500 rounded-full p-2">
+                <MicOff className="w-4 h-4 text-white" />
+              </div>
+            )}
+          </div>
+
+          {/* AI Interviewer Avatar */}
+          <div className="relative flex items-center justify-center bg-gray-800 rounded-lg">
+            <AIInterviewerAvatar
+              isSpeaking={isAISpeaking}
+              isListening={!isAISpeaking}
+            />
           </div>
         </div>
-      )}
 
-      {/* Message bubble */}
-      {isSpeaking && currentMessage && (
-        <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 max-w-sm w-full px-4">
-          <div className="bg-white/95 backdrop-blur-md text-slate-800 text-sm p-4 rounded-2xl shadow-xl border border-white/20 relative">
-            <div className="absolute -top-2 left-8 w-4 h-4 bg-white/95 border-l border-t border-white/20 transform rotate-45" />
-            <p className="leading-relaxed">{currentMessage}</p>
-          </div>
-        </div>
-      )}
+        {/* Add this before your existing buttons */}
+        <select
+          value={selectedLanguage}
+          onChange={(e) => setSelectedLanguage(e.target.value)}
+          className="bg-gray-700 text-white px-3 py-2 rounded"
+        >
+          <option value="JavaScript">JavaScript</option>
+          <option value="Python">Python</option>
+          <option value="Java">Java</option>
+          <option value="C++">C++</option>
+        </select>
 
-      {/* Decorative elements */}
-      <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
-        <div className="absolute top-12 right-12 w-16 h-16 bg-gradient-to-br from-blue-400/10 to-purple-500/10 rounded-full blur-xl" />
-        <div className="absolute bottom-16 left-16 w-20 h-20 bg-gradient-to-br from-indigo-400/10 to-blue-500/10 rounded-full blur-xl" />
+        
       </div>
-    </Card>
+
+      {/* Control Bar */}
+      <div className="bg-gray-800 px-6 py-4 flex items-center justify-center space-x-6">
+        <Button
+          onClick={() => listenToUser()}
+          variant="ghost"
+          size="icon"
+          className={`rounded-full w-14 h-14 ${isMuted ? 'bg-red-600' : 'bg-green-700'} text-white hover:bg-green-800`}
+        >
+          {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+        </Button>
+
+        <Button
+          onClick={handleCodeEditorClick}
+          variant="ghost"
+          size="icon"
+          className="rounded-full w-14 h-14 text-white bg-blue-600 hover:bg-blue-700"
+          disabled={!interviewStatus.active}
+        >
+          {interviewStatus.stage === 'coding_challenges' && !question ? (
+            <span className="animate-pulse">⏳</span>
+          ) : (
+            <Code className="w-5 h-5" />
+          )}
+        </Button>
+
+        <Button
+          onClick={handleEndCall}
+          variant="ghost"
+          size="icon"
+          className="rounded-full w-14 h-14 bg-red-600 hover:bg-red-700 text-white"
+        >
+          <PhoneOff className="w-5 h-5" />
+        </Button>
+
+        <Button
+          onClick={toggleVideo}
+          variant="ghost"
+          size="icon"
+          className={`rounded-full w-14 h-14 ${isVideoOff ? 'bg-red-600' : 'bg-gray-700'} text-white`}
+        >
+          {isVideoOff ? <CameraOff className="w-5 h-5" /> : <Camera className="w-5 h-5" />}
+        </Button>
+      </div>
+
+      {/* Debug Info */}
+    </div>
   )
 }
