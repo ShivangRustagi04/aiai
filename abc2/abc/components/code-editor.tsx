@@ -11,6 +11,7 @@ interface CodeEditorProps {
   code: string
   language: string
   onChange: (code: string) => void
+  onLanguageChange: (language: string) => void 
   onRun: () => void
   onSubmit: () => void
   output: string
@@ -29,6 +30,7 @@ export default function CodeEditor({
   code,
   language,
   onChange,
+  onLanguageChange,
   onRun,
   onSubmit,
   output,
@@ -125,7 +127,7 @@ useEffect(() => {
 
           {/* Editor Controls */}
           <div className="flex items-center justify-between flex-shrink-0">
-            <Select value={language} onValueChange={() => {}}>
+            <Select value={language} onValueChange={onLanguageChange}>
               <SelectTrigger className="w-32 h-8 bg-gray-800 border-gray-700 text-white text-sm">
                 <SelectValue placeholder="Language" />
               </SelectTrigger>
@@ -203,13 +205,13 @@ useEffect(() => {
               <div className="w-full h-full bg-gray-700 flex items-center justify-center">
                 <div className="text-center">
                   <div className="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center mx-auto mb-2">
-                    <span className="text-xl text-white">AI</span>
+                    <span className="text-xl text-white">G</span>
                   </div>
-                  <span className="text-sm text-gray-300">AI Interviewer</span>
+                  <span className="text-sm text-gray-300">Gyani</span>
                 </div>
               </div>
               <div className="absolute bottom-2 left-2 bg-black/60 rounded px-2 py-1">
-                <span className="text-white text-xs">AI Interviewer</span>
+                <span className="text-white text-xs">Gyani</span>
               </div>
               {isAISpeaking && (
                 <div className="absolute top-2 right-2">
