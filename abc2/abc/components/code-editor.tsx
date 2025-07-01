@@ -49,16 +49,95 @@ export default function CodeEditor({
   const [error, setError] = useState<string | null>(null)
 
   // Fetch coding problem from backend
-useEffect(() => {
-  if (question) {
-    setCurrentQuestion(question)
-    setLoading(false)
-  } else {
-    setCurrentQuestion("⚠️ No coding question available. Please start the interview again.")
-    setError("Missing coding question")
-    setLoading(false)
-  }
-}, [question])
+  useEffect(() => {
+    if (question) {
+      setCurrentQuestion(question)
+      setLoading(false)
+    } else {
+      setCurrentQuestion("⚠️ No coding question available. Please start the interview again.")
+      setError("Missing coding question")
+      setLoading(false)
+    }
+  }, [question])
+
+  // Enhanced copy/paste prevention
+  useEffect(() => {
+    const preventCopyPaste = (e: Event) => {
+      e.preventDefault()
+      e.stopPropagation()
+      return false
+    }
+
+    const preventKeyboardShortcuts = (e: KeyboardEvent) => {
+      // Prevent Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+S, Ctrl+Z, Ctrl+Y
+      if (e.ctrlKey || e.metaKey) {
+        const forbiddenKeys = ['c', 'v', 'x', 'a', 's', 'z', 'y']
+        if (forbiddenKeys.includes(e.key.toLowerCase())) {
+          e.preventDefault()
+          e.stopPropagation()
+          return false
+        }
+      }
+      
+      // Prevent F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U
+      if (e.key === 'F12' || 
+          (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J')) ||
+          (e.ctrlKey && e.key === 'u')) {
+        e.preventDefault()
+        e.stopPropagation()
+        return false
+      }
+    }
+
+    const preventRightClick = (e: MouseEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      return false
+    }
+
+    const preventDrag = (e: DragEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      return false
+    }
+
+    const preventSelection = (e: Event) => {
+      // Allow text selection only in the code editor textarea
+      const target = e.target as HTMLElement
+      if (target.tagName !== 'TEXTAREA' || !target.classList.contains('code-editor')) {
+        e.preventDefault()
+        return false
+      }
+    }
+
+    // Add event listeners to document
+    document.addEventListener('copy', preventCopyPaste, true)
+    document.addEventListener('paste', preventCopyPaste, true)
+    document.addEventListener('cut', preventCopyPaste, true)
+    document.addEventListener('keydown', preventKeyboardShortcuts, true)
+    document.addEventListener('contextmenu', preventRightClick, true)
+    document.addEventListener('dragstart', preventDrag, true)
+    document.addEventListener('selectstart', preventSelection, true)
+
+    // Disable text selection via CSS
+    document.body.style.userSelect = 'none'
+    document.body.style.webkitUserSelect = 'none'
+
+    return () => {
+      // Cleanup event listeners
+      document.removeEventListener('copy', preventCopyPaste, true)
+      document.removeEventListener('paste', preventCopyPaste, true)
+      document.removeEventListener('cut', preventCopyPaste, true)
+      document.removeEventListener('keydown', preventKeyboardShortcuts, true)
+      document.removeEventListener('contextmenu', preventRightClick, true)
+      document.removeEventListener('dragstart', preventDrag, true)
+      document.removeEventListener('selectstart', preventSelection, true)
+      
+      // Restore text selection
+      document.body.style.userSelect = 'auto'
+      document.body.style.webkitUserSelect = 'auto'
+    }
+  }, [])
 
   // Initialize video stream
   useEffect(() => {
@@ -98,9 +177,41 @@ useEffect(() => {
       }
     }
   }, [isVideoOff, isMuted, videoRef, onVideoStreamReady])
+
+  // Handle textarea events with enhanced security
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    onChange(e.target.value)
+  }
+
+  const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Allow normal typing and navigation keys, but prevent copy/paste shortcuts
+    if (e.ctrlKey || e.metaKey) {
+      const forbiddenKeys = ['c', 'v', 'x', 'a', 's', 'z', 'y']
+      if (forbiddenKeys.includes(e.key.toLowerCase())) {
+        e.preventDefault()
+        e.stopPropagation()
+      }
+    }
+  }
+
+  const preventContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
+
+  const preventDragEvents = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }
   
   return (
-    <div className="h-screen flex flex-col bg-gray-900 overflow-hidden">
+    <div 
+      className="h-screen flex flex-col bg-gray-900 overflow-hidden"
+      style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+      onContextMenu={preventContextMenu}
+      onDragStart={preventDragEvents}
+      onDrop={preventDragEvents}
+    >
       {/* Main Content Area */}
       <div className="flex-1 flex gap-4 p-4 min-h-0">
         {/* Left Panel - Problem & Code */}
@@ -112,7 +223,11 @@ useEffect(() => {
               {loading && <span className="ml-2 text-sm text-gray-400">Loading...</span>}
               {error && <span className="ml-2 text-sm text-red-400">Error</span>}
             </div>
-            <div className="flex-1 text-gray-300 text-sm font-mono bg-gray-800 p-3 rounded-lg border border-gray-700 overflow-y-auto leading-relaxed">
+            <div 
+              className="flex-1 text-gray-300 text-sm font-mono bg-gray-800 p-3 rounded-lg border border-gray-700 overflow-y-auto leading-relaxed"
+              style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+              onContextMenu={preventContextMenu}
+            >
               {loading ? (
                 <div className="flex items-center justify-center h-full">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
@@ -158,10 +273,18 @@ useEffect(() => {
             </div>
             <textarea
               value={code}
-              onChange={(e) => onChange(e.target.value)}
-              className="flex-1 bg-gray-900 text-white font-mono text-sm p-4 border border-gray-700 rounded-b-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 leading-relaxed min-h-0"
+              onChange={handleTextareaChange}
+              onKeyDown={handleTextareaKeyDown}
+              onCopy={(e) => e.preventDefault()}
+              onPaste={(e) => e.preventDefault()}
+              onCut={(e) => e.preventDefault()}
+              onContextMenu={preventContextMenu}
+              onDragStart={preventDragEvents}
+              onDrop={preventDragEvents}
+              className="flex-1 bg-gray-900 text-white font-mono text-sm p-4 border border-gray-700 rounded-b-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 leading-relaxed min-h-0 code-editor"
               placeholder="Write your code here..."
               spellCheck={false}
+              style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
             />
           </div>
         </div>
@@ -236,7 +359,11 @@ useEffect(() => {
               <CardTitle className="text-white text-sm">Output</CardTitle>
             </CardHeader>
             <CardContent className="flex-1 flex flex-col min-h-0 p-3">
-              <pre className="text-green-400 text-xs font-mono whitespace-pre-wrap flex-1 overflow-auto p-3 bg-gray-900 rounded border border-gray-700 min-h-0">
+              <pre 
+                className="text-green-400 text-xs font-mono whitespace-pre-wrap flex-1 overflow-auto p-3 bg-gray-900 rounded border border-gray-700 min-h-0"
+                style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
+                onContextMenu={preventContextMenu}
+              >
                 {output || "Run your code to see output..."}
               </pre>
             </CardContent>
