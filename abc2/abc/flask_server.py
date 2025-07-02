@@ -3,6 +3,11 @@ from flask_cors import CORS
 import tempfile
 import os
 from flask_cors import  CORS
+import datetime
+from datetime import timedelta
+import secrets
+import smtplib
+from email.mime.text import MIMEText
 import threading
 
 from expert_technical_interviewer_f04TV7hdF9tk2UQyPV3zIpKDIo7qr5 import ExpertTechnicalInterviewer
@@ -236,8 +241,98 @@ def process_speech():
         'coding_challenges_asked': interview_state['coding_questions_asked'],
         'current_question': interview_state.get('current_question')
     })
+interview_state['interview_links'] = {} 
 
+@app.route('/api/generate-interview-link', methods=['POST'])
+def generate_interview_link():
+    data = request.json
+    recipient_email = data.get('email')
+    
+    if not recipient_email:
+        return jsonify({'error': 'Recipient email is required'}), 400
+    
+    token = secrets.token_urlsafe(32)
+    
+    expiration_date = datetime.datetime.now() + timedelta(days=7)
+    
+    interview_state['interview_links'][token] = {
+        'email': recipient_email,
+        'expires_at': expiration_date.isoformat(),
+        'used': False,
+        'created_at': datetime.datetime.now().isoformat()
+    }
+    
+    interview_link = f"https://yourdomain.com/interview/{token}"
+    
+    try:
+        send_interview_link_email(recipient_email, interview_link, expiration_date)
+        return jsonify({
+            'status': 'success',
+            'message': 'Interview link sent successfully',
+            'expires_at': expiration_date.isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            'error': f'Failed to send email: {str(e)}',
+            'interview_link': interview_link 
+        }), 500
 
+def send_interview_link_email(recipient, link, expires_at):
+    """Helper function to send interview link email"""
+    SMTP_SERVER = "your_smtp_server.com"
+    SMTP_PORT = 587
+    SMTP_USERNAME = "your_email@example.com"
+    SMTP_PASSWORD = "your_email_password"
+    SENDER_EMAIL = "no-reply@yourdomain.com"
+    
+    subject = "Your Technical Interview Link"
+    body = f"""
+    <p>Hello,</p>
+    <p>Here is your interview link: <a href="{link}">{link}</a></p>
+    <p>This link will expire on {expires_at.strftime('%Y-%m-%d %H:%M:%S')}.</p>
+    <p>Please complete your interview before this date.</p>
+    <p>Best regards,<br>Interview Team</p>
+    """
+    
+    msg = MIMEText(body, 'html')
+    msg['Subject'] = subject
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = recipient
+    
+    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USERNAME, SMTP_PASSWORD)
+        server.send_message(msg)
+
+@app.route('/api/validate-interview-link/<token>', methods=['GET'])
+def validate_interview_link(token):
+    """Endpoint to validate an interview link"""
+    if token not in interview_state['interview_links']:
+        return jsonify({'valid': False, 'reason': 'Invalid token'}), 404
+    
+    link_data = interview_state['interview_links'][token]
+    expiration_date = datetime.datetime.fromisoformat(link_data['expires_at'])
+    
+    if datetime.datetime.now() > expiration_date:
+        return jsonify({'valid': False, 'reason': 'Link expired'}), 410
+    
+    if link_data['used']:
+        return jsonify({'valid': False, 'reason': 'Link already used'}), 403
+    
+    return jsonify({
+        'valid': True,
+        'expires_at': link_data['expires_at'],
+        'email': link_data['email']
+    })
+
+@app.route('/api/mark-link-used/<token>', methods=['POST'])
+def mark_link_used(token):
+    """Mark an interview link as used"""
+    if token not in interview_state['interview_links']:
+        return jsonify({'error': 'Invalid token'}), 404
+    
+    interview_state['interview_links'][token]['used'] = True
+    return jsonify({'status': 'success'})
 @app.route('/api/interview-status', methods=['GET'])
 def get_interview_status():
     """Get current interview status and progress"""
