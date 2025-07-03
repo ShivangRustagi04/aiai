@@ -17,12 +17,12 @@ interface CodeEditorProps {
   output: string
   isSubmitted: boolean
   question?: string
-  videoRef?: React.RefObject<HTMLVideoElement>
+  videoRef?: React.RefObject<HTMLVideoElement|null>
   isVideoOff?: boolean
   isMuted?: boolean
   isAISpeaking?: boolean
   isAIListening?: boolean
-  onVideoStreamReady?: (stream: MediaStream) => void
+  mediaStreamRef?: React.RefObject<MediaStream|null>
   problemId?: string
 }
 
@@ -41,14 +41,13 @@ export default function CodeEditor({
   isMuted = false,
   isAISpeaking = false,
   isAIListening = false,
-  onVideoStreamReady,
+  mediaStreamRef,
   problemId,
 }: CodeEditorProps) {
   const [currentQuestion, setCurrentQuestion] = useState(question || "")
   const [loading, setLoading] = useState(!question)
   const [error, setError] = useState<string | null>(null)
 
-  // Fetch coding problem from backend
   useEffect(() => {
     if (question) {
       setCurrentQuestion(question)
@@ -60,7 +59,30 @@ export default function CodeEditor({
     }
   }, [question])
 
-  // Enhanced copy/paste prevention
+  useEffect(() => {
+    const initializeVideo = () => {
+      if (isVideoOff || !videoRef?.current || !mediaStreamRef?.current) return;
+
+      try {
+        // Use the existing media stream from the parent component
+        if (videoRef.current && mediaStreamRef.current) {
+          videoRef.current.srcObject = mediaStreamRef.current;
+        }
+      } catch (err) {
+        console.error('Error accessing camera:', err)
+      }
+    }
+
+    initializeVideo()
+
+    return () => {
+      // Don't stop the tracks here - let the parent component manage the stream
+      if (videoRef?.current?.srcObject) {
+        videoRef.current.srcObject = null;
+      }
+    }
+  }, [isVideoOff, isMuted, videoRef, mediaStreamRef])
+
   useEffect(() => {
     const preventCopyPaste = (e: Event) => {
       e.preventDefault()
@@ -69,7 +91,6 @@ export default function CodeEditor({
     }
 
     const preventKeyboardShortcuts = (e: KeyboardEvent) => {
-      // Prevent Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+S, Ctrl+Z, Ctrl+Y
       if (e.ctrlKey || e.metaKey) {
         const forbiddenKeys = ['c', 'v', 'x', 'a', 's', 'z', 'y']
         if (forbiddenKeys.includes(e.key.toLowerCase())) {
@@ -79,7 +100,6 @@ export default function CodeEditor({
         }
       }
       
-      // Prevent F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U
       if (e.key === 'F12' || 
           (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J')) ||
           (e.ctrlKey && e.key === 'u')) {
@@ -102,7 +122,6 @@ export default function CodeEditor({
     }
 
     const preventSelection = (e: Event) => {
-      // Allow text selection only in the code editor textarea
       const target = e.target as HTMLElement
       if (target.tagName !== 'TEXTAREA' || !target.classList.contains('code-editor')) {
         e.preventDefault()
@@ -110,7 +129,6 @@ export default function CodeEditor({
       }
     }
 
-    // Add event listeners to document
     document.addEventListener('copy', preventCopyPaste, true)
     document.addEventListener('paste', preventCopyPaste, true)
     document.addEventListener('cut', preventCopyPaste, true)
@@ -119,12 +137,10 @@ export default function CodeEditor({
     document.addEventListener('dragstart', preventDrag, true)
     document.addEventListener('selectstart', preventSelection, true)
 
-    // Disable text selection via CSS
     document.body.style.userSelect = 'none'
     document.body.style.webkitUserSelect = 'none'
 
     return () => {
-      // Cleanup event listeners
       document.removeEventListener('copy', preventCopyPaste, true)
       document.removeEventListener('paste', preventCopyPaste, true)
       document.removeEventListener('cut', preventCopyPaste, true)
@@ -133,58 +149,16 @@ export default function CodeEditor({
       document.removeEventListener('dragstart', preventDrag, true)
       document.removeEventListener('selectstart', preventSelection, true)
       
-      // Restore text selection
       document.body.style.userSelect = 'auto'
       document.body.style.webkitUserSelect = 'auto'
     }
   }, [])
 
-  // Initialize video stream
-  useEffect(() => {
-    const initializeVideo = async () => {
-      if (isVideoOff || !videoRef?.current) return
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-            aspectRatio: { ideal: 16/9 }
-          },
-          audio: !isMuted
-        })
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream
-        }
-
-        // Notify parent component about video stream
-        if (onVideoStreamReady) {
-          onVideoStreamReady(stream)
-        }
-      } catch (err) {
-        console.error('Error accessing camera:', err)
-      }
-    }
-
-    initializeVideo()
-
-    // Cleanup function
-    return () => {
-      if (videoRef?.current?.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream
-        stream.getTracks().forEach(track => track.stop())
-      }
-    }
-  }, [isVideoOff, isMuted, videoRef, onVideoStreamReady])
-
-  // Handle textarea events with enhanced security
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     onChange(e.target.value)
   }
 
   const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Allow normal typing and navigation keys, but prevent copy/paste shortcuts
     if (e.ctrlKey || e.metaKey) {
       const forbiddenKeys = ['c', 'v', 'x', 'a', 's', 'z', 'y']
       if (forbiddenKeys.includes(e.key.toLowerCase())) {
