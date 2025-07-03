@@ -4,30 +4,23 @@ import tempfile
 import os
 from flask_cors import  CORS
 import datetime
-from datetime import timedelta
+from datetime import datetime , timedelta
 import secrets
 import smtplib
 from email.mime.text import MIMEText
 import threading
 
-from expert_technical_interviewer_f04TV7hdF9tk2UQyPV3zIpKDIo7qr5 import ExpertTechnicalInterviewer
+from backend import ExpertTechnicalInterviewer
+from shared_state import interview_state, save_to_conversation_history
+
+
+
+  # when user sends a message
 
 app = Flask(__name__)
 CORS(app)
 
-interviewer = None
-interview_state = {
-    'active': False,
-    'stage': 'greeting',
-    'current_question': None,
-    'conversation_history': [],
-    'skill_questions_asked': 0,
-    'coding_questions_asked': 0,
-    'personal_info_collected': False,
-    'tech_background_collected': False,
-    'skills_collected': '',
-    'current_domain': None
-}
+
 
 def initialize_interviewer():
     global interviewer
@@ -56,11 +49,11 @@ def start_interview():
         'tech_background_collected': False,
         'skills_collected': '',
         'current_domain': None,
-        'current_question': None
+        'current_question': None,
+        'interview_links': {}
     })
 
-    welcome_msg = "Hello! I am Gyani, your technical interviewer. Welcome to your interview session today. Let's begin - could you please tell me a bit about yourself?"
-    
+   
     try:
         import threading
         threading.Thread(target=interviewer.start_interview, daemon=True).start()
@@ -70,10 +63,43 @@ def start_interview():
 
     return jsonify({
         'status': 'started',
-        'message': welcome_msg,
         'interview_active': True,
         'stage': 'greeting'
     })
+
+
+
+# Replace your transcript endpoint in flask_server.py with this:
+
+
+# Also, make sure your conversation history is being saved properly.
+# Update your process_speech endpoint to ensure timestamps are saved:
+
+# In your process_speech function, replace the conversation history saving with:
+def save_to_conversation_history(role, content):
+    """Helper function to save messages with proper timestamps"""
+    interview_state["conversation_history"].append({
+        "role": role,
+        "content": content,
+        "timestamp": datetime.utcnow().isoformat()
+    })
+from datetime import datetime
+
+@app.route('/api/transcript', methods=['GET'])
+def get_transcript():
+    history = interview_state.get("conversation_history", [])
+
+    transcript = []
+    for entry in history:
+        if entry.get("role") in ["user", "assistant"]:
+            transcript.append({
+                "speaker": "User" if entry["role"] == "user" else "AI",
+                "message": entry["content"],
+                "timestamp": int(datetime.fromisoformat(entry["timestamp"]).timestamp() * 1000)
+            })
+
+    return jsonify({ "transcript": transcript })
+
 
 @app.route('/api/problems/random', methods=['GET'])
 def get_random_problem():
@@ -90,158 +116,161 @@ def get_random_problem():
 def process_speech():
     global interviewer, interview_state
 
-    if not interviewer:
-        return jsonify({'error': 'Interviewer not initialized'}), 400
-
     data = request.json
     user_input = data.get('text', '').strip()
 
     if not user_input:
-        return jsonify({'error': 'No speech input provided'}), 400
+        return jsonify({'error': 'No input'}), 400
 
-    # ✅ Force move to coding stage (manual trigger)
+    # ✅ Save user message ONCE, only if not a command
+
+
+    print("📥 process_speech called with:", user_input)
+
+    response = ""
+
+    # ✅ Handle coding start
     if user_input.lower() == "ready_for_coding":
         interview_state['stage'] = 'coding_challenges'
         interview_state['coding_questions_asked'] = 1
+        coding_question = interviewer._generate_coding_question(
+            interview_state.get("current_domain", "python")
+        )
+        interview_state['current_question'] = coding_question
+        response = "✅ Great! Now let's move to the coding challenge."
+
+        print("🤖 AI (coding intro):", response)
         try:
-            coding_question = interviewer._generate_coding_question(
-                interview_state.get("current_domain", "python")
-            )
-            interview_state['current_question'] = coding_question
-            print(f"🧐 Generated coding question: {coding_question}")
+            interviewer.speak(response)
         except Exception as e:
-            print(f"Error generating coding question: {e}")
-            interview_state['current_question'] = "Write a function that takes a string and returns it reversed. For example, 'hello' should return 'olleh'."
+            print("TTS error:", e)
+
+        save_to_conversation_history("assistant", response)
 
         return jsonify({
-            "response": "✅ Great! Now let's move to the coding challenge. Please use the code editor to solve the problem.",
-            "question": interview_state["current_question"],
-            "stage": interview_state["stage"]
+            "response": response,
+            "question": coding_question,
+            "stage": "coding_challenges"
         })
 
-    # ✅ Handle code submission and transition to doubt clearing
+    # ✅ Handle coding done
     if user_input.lower() == "done_coding":
+        response = "Thanks for your submission. Let's move on to any questions you might have."
+        interview_state['stage'] = 'doubt_clearing'
+
+        print("🤖 AI (done coding):", response)
         try:
-            latest_code = interview_state.get("latest_code", "")
-            language = interview_state.get("language", "python")
-
-            if latest_code:
-                interviewer.submit_candidate_code(latest_code)
-
-            interview_state['stage'] = 'doubt_clearing'
-            response = "Thanks for your submission. Now let's move to any questions or clarifications you might have."
-            interview_state['active'] = True  # make sure interview stays active
-
-        # ✅ Launch doubt-clearing in separate thread
-            try:
-                import threading
-                threading.Thread(
-                    target=interviewer._conduct_doubt_clearing,
-                    args=(True,),  # False if professional interview
-                    daemon=True
-                ).start()
-            except Exception as e:
-                print(f"❌ Failed to launch doubt-clearing: {e}")
-
+            interviewer.speak(response)
         except Exception as e:
-            print(f"Code submission error: {e}")
-            response = "Thanks for submitting. Let's move to the next part of the interview."
+            print("TTS error:", e)
 
-        try:
-            interviewer.speak(response, interruptible=False)
-        except Exception as e:
-            print(f"TTS error: {e}")
-
-        interview_state['conversation_history'].append({'role': 'assistant', 'content': response})
+        save_to_conversation_history("assistant", response)
 
         return jsonify({
-            'response': response,
-            'status': 'ok',
-            'stage': interview_state['stage'],
-            'questions_asked': interview_state['skill_questions_asked'],
-            'coding_challenges_asked': interview_state['coding_questions_asked']
+            "response": response,
+            "stage": "doubt_clearing"
         })
 
+    # ✅ Main Interview Logic
     try:
-        interview_state['conversation_history'].append({'role': 'user', 'content': user_input})
-        response = ""
-
         if interview_state['stage'] == 'greeting':
-            interview_state['personal_info_collected'] = True
-            interview_state['stage'] = 'tech_background'
             response = "Thanks for the intro! Tell me more about your technical background."
+            interview_state['stage'] = 'tech_background'
 
         elif interview_state['stage'] == 'tech_background':
-            interview_state['tech_background_collected'] = True
-            interview_state['skills_collected'] = user_input
-
-            try:
-                interview_state['current_domain'] = interviewer._identify_tech_domain(user_input) or 'general'
-            except:
-                interview_state['current_domain'] = 'general'
-
             interview_state['stage'] = 'skill_questions'
-            interview_state['skill_questions_asked'] = 1
-            try:
-                question = interviewer._add_domain_specific_followup(interview_state['current_domain'])
-            except:
-                question = "Can you explain the difference between a list and a dictionary in Python?"
-            response = f"Great! Let's begin your technical round.\n\n{question}"
+            followup = interviewer._add_domain_specific_followup(
+                interview_state.get("current_domain", "general")
+            )
+            response = f"Awesome! Let's begin your technical round.\n\n{followup}"
 
         elif interview_state['stage'] == 'skill_questions':
-            if interview_state['skill_questions_asked'] < 3:
-                interview_state['skill_questions_asked'] += 1
-                if interview_state['skill_questions_asked'] < 3:
-                    try:
-                        question = interviewer._add_domain_specific_followup(interview_state['current_domain'])
-                    except:
-                        question = "Can you explain how you'd improve performance in a SQL query?"
-                    response = f"Good answer! Here's another question:\n\n{question}"
-                else:
-                    interview_state['stage'] = 'coding_challenges'
-                    interview_state['coding_questions_asked'] = 1
-                    try:
-                        coding_question = interviewer._generate_coding_question(
-                            interview_state.get("current_domain", "general")
-                        )
-                        interview_state['current_question'] = coding_question
-                        print(f"🧐 Auto-generated coding question: {coding_question}")
-                    except Exception as e:
-                        print(f"Error generating coding question: {e}")
-                        interview_state['current_question'] = "Write a function that takes a string and returns it reversed. For example, 'hello' should return 'olleh'."
+            followup = interviewer._add_domain_specific_followup(
+                interview_state.get("current_domain", "general")
+            )
+            response = f"Great. Here's your next question:\n\n{followup}"
 
-                    response = (
-                        "✅ You've done well with theory!\n\n"
-                        "🧠 Please go to the code editor to demonstrate your coding skills."
-                    )
+        else:
+            response = "Let's continue."
 
-        elif interview_state['stage'] == 'coding_challenges':
-            if interview_state['coding_questions_asked'] == 1:
-                interview_state['coding_questions_asked'] += 1
-                response = "Great attempt! Now go ahead and complete the second coding challenge in the editor."
-            else:
-                response = "✅ You're doing well! Finish your code and submit it when you're ready."
+        print("🤖 AI says:", response)
+        try:
+            interviewer.speak(response)
+        except Exception as e:
+            print("TTS error:", e)
 
-        elif interview_state['stage'] == 'concluded':
-            response = "📌 The interview has already ended. Thank you!"
+        save_to_conversation_history("assistant", response)
 
-        interviewer.speak(response, interruptible=False)
+        return jsonify({
+            "response": response,
+            "stage": interview_state['stage']
+        })
 
     except Exception as e:
-        print(f"Error: {str(e)}")
-        response = "⚠️ Something went wrong, but let's continue."
+        print("❌ Error during process_speech:", e)
+        return jsonify({"error": str(e)}), 500
 
-    interview_state['conversation_history'].append({'role': 'assistant', 'content': response})
 
-    return jsonify({
-        'response': response,
-        'status': 'ok',
-        'stage': interview_state['stage'],
-        'questions_asked': interview_state['skill_questions_asked'],
-        'coding_challenges_asked': interview_state['coding_questions_asked'],
-        'current_question': interview_state.get('current_question')
+def save_to_conversation_history(role, content):
+    entry = {
+        "role": role,
+        "content": content,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    interview_state["conversation_history"].append(entry)
+    print(f"💾 SAVED TO HISTORY: [{role.upper()}] {content}")
+    print(f"🧠 Last 2 messages:")
+    for msg in interview_state["conversation_history"][-2:]:
+        print(f"  - {msg['role']}: {msg['content']}")
+
+
+@app.route('/api/log-warning', methods=['POST'])
+def log_warning():
+    data = request.json
+    warning_type = data.get('type')
+    timestamp = data.get('timestamp')
+    message = data.get('message')
+    
+    # Add to interview state
+    if 'warnings' not in interview_state:
+        interview_state['warnings'] = []
+    
+    # Add the warning
+    interview_state['warnings'].append({
+        'type': warning_type,
+        'timestamp': timestamp,
+        'message': message,
+        'stage': interview_state.get('stage', 'unknown')
     })
-interview_state['interview_links'] = {} 
+    
+    violation_count = len(interview_state['warnings'])
+    print(f"🚨 WARNING LOGGED: {warning_type} - {message} (Violation #{violation_count})")
+    
+    # Optional: Add escalating responses
+    if violation_count >= 3:
+        print("🔴 CRITICAL: Multiple violations detected!")
+        # You could end the interview here or send additional warnings
+    
+    return jsonify({
+        'status': 'logged',
+        'violation_count': violation_count,
+        'total_violations': violation_count
+    })
+
+@app.route('/api/get-warnings', methods=['GET'])
+def get_warnings():
+    warnings = interview_state.get('warnings', [])
+    return jsonify({'warnings': warnings, 'count': len(warnings)})
+
+# Fix 3: Add debug endpoint to check conversation history
+@app.route('/api/debug-transcript', methods=['GET'])
+def debug_transcript():
+    """Debug endpoint to check raw conversation history"""
+    return jsonify({
+        "raw_history": interview_state.get("conversation_history", []),
+        "history_length": len(interview_state.get("conversation_history", [])),
+        "last_entry": interview_state.get("conversation_history", [])[-1] if interview_state.get("conversation_history") else None
+    })
 
 @app.route('/api/generate-interview-link', methods=['POST'])
 def generate_interview_link():
