@@ -240,8 +240,6 @@ export default function GoogleMeetInterview() {
 
   // Initialize media stream
   const initializeMediaStream = async () => {
-    if (!interviewStarted || isVideoOff) return;
-
     try {
       // Stop any existing stream first
       if (videoRef.current?.srcObject) {
@@ -249,6 +247,7 @@ export default function GoogleMeetInterview() {
         existingStream.getTracks().forEach(track => track.stop());
       }
 
+      // Always request video, regardless of isVideoOff state during interview
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: true, 
         audio: !isMuted 
@@ -262,6 +261,19 @@ export default function GoogleMeetInterview() {
       console.error("Error accessing media devices:", err);
     }
   };
+
+useEffect(() => {
+  if (interviewStarted) {
+    initializeMediaStream();
+  }
+
+  return () => {
+    if (videoRef.current?.srcObject && !interviewStarted) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+    }
+  };
+}, [interviewStarted, isMuted]); // Removed isVideoOff from dependencies
 
   // Effects
   useEffect(() => {

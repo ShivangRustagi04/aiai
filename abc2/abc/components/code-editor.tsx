@@ -60,28 +60,32 @@ export default function CodeEditor({
   }, [question])
 
   useEffect(() => {
-    const initializeVideo = () => {
-      if (isVideoOff || !videoRef?.current || !mediaStreamRef?.current) return;
+  const initializeVideo = () => {
+    if (!videoRef?.current || !mediaStreamRef?.current) return;
 
-      try {
-        // Use the existing media stream from the parent component
-        if (videoRef.current && mediaStreamRef.current) {
-          videoRef.current.srcObject = mediaStreamRef.current;
-        }
-      } catch (err) {
-        console.error('Error accessing camera:', err)
+    try {
+      // Always show video feed
+      if (videoRef.current && mediaStreamRef.current) {
+        videoRef.current.srcObject = mediaStreamRef.current;
+        // Ensure video tracks are enabled
+        mediaStreamRef.current.getVideoTracks().forEach(track => {
+          track.enabled = true;
+        });
       }
+    } catch (err) {
+      console.error('Error accessing camera:', err);
     }
+  }
 
-    initializeVideo()
+  initializeVideo();
 
-    return () => {
-      // Don't stop the tracks here - let the parent component manage the stream
-      if (videoRef?.current?.srcObject) {
-        videoRef.current.srcObject = null;
-      }
+  return () => {
+    // Don't stop the tracks, just clear the ref
+    if (videoRef?.current?.srcObject) {
+      videoRef.current.srcObject = null;
     }
-  }, [isVideoOff, isMuted, videoRef, mediaStreamRef])
+  }
+}, [videoRef, mediaStreamRef]);
 
   useEffect(() => {
     const preventCopyPaste = (e: Event) => {
@@ -268,25 +272,15 @@ export default function CodeEditor({
           {/* Video Feeds */}
           <div className="flex flex-col gap-3 flex-shrink-0">
             {/* User Video Feed */}
+            // In the video feed section of code-editor.tsx, replace with:
             <div className="relative w-full aspect-video bg-gray-800 rounded-lg overflow-hidden">
-              {isVideoOff ? (
-                <div className="w-full h-full bg-gray-700 flex items-center justify-center">
-                  <div className="text-center">
-                    <div className="w-12 h-12 bg-gray-600 rounded-full flex items-center justify-center mx-auto mb-2">
-                      <span className="text-xl">👤</span>
-                    </div>
-                    <span className="text-sm text-gray-300">Camera Off</span>
-                  </div>
-                </div>
-              ) : (
-                <video 
-                  ref={videoRef} 
-                  autoPlay 
-                  muted 
-                  playsInline 
-                  className="w-full h-full object-cover"
-                />
-              )}
+              <video 
+                ref={videoRef} 
+                autoPlay 
+                muted 
+                playsInline 
+                className="w-full h-full object-cover"
+              />
               <div className="absolute bottom-2 left-2 bg-black/60 rounded px-2 py-1">
                 <span className="text-white text-xs">You</span>
               </div>
