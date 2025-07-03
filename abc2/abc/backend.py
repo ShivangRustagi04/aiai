@@ -3,10 +3,7 @@ import re
 import random
 import time
 import speech_recognition as sr
-from gtts import gTTS
 import pygame
-import queue
-from io import BytesIO
 import google.generativeai as genai
 from dotenv import load_dotenv
 import cv2
@@ -16,11 +13,9 @@ import numpy as np
 from docx import Document
 import pygetwindow as gw
 import threading
-import wave
 from scipy.io import wavfile
 import subprocess
 import tempfile
-import sys
 import boto3
 from sentence_transformers import SentenceTransformer
 import faiss
