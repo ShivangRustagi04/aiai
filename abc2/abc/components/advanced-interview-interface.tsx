@@ -189,86 +189,125 @@ export default function GoogleMeetInterview() {
 
 
   // Tab switch detection
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        // User switched tab/minimized
-        setIsTabActive(false)
-        const warning = `⚠️ Tab switch detected at ${new Date().toLocaleTimeString()}`
-        setTabSwitchWarnings(prev => [...prev, warning])
+  // Tab switch detection - REPLACE YOUR EXISTING ONE
+  // Enhanced tab/extension detection
+useEffect(() => {
+  let lastFocusTime = Date.now()
+  let violationCooldown = false
 
-        // Send to backend
-        fetch("http://localhost:5000/api/log-warning", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            type: "tab_switch",
-            timestamp: Date.now(),
-            message: "User switched tabs or minimized window"
-          })
-        }).catch(console.error)
-      } else {
-        // User returned
-        setIsTabActive(true)
-      }
+  const logViolation = (type: string, message: string) => {
+    if (violationCooldown) return // Prevent spam
+    
+    violationCooldown = true
+    setTimeout(() => violationCooldown = false, 1000) // 1 second cooldown
+    
+    const warning = `⚠️ ${message} at ${new Date().toLocaleTimeString()}`
+    setTabSwitchWarnings(prev => [...prev, warning])
+    
+    fetch("http://localhost:5000/api/log-warning", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        type: type, 
+        timestamp: Date.now(),
+        message: message
+      })
+    }).catch(console.error)
+  }
+
+  const handleVisibilityChange = () => {
+    if (document.hidden) {
+      setIsTabActive(false)
+      logViolation("tab_switch", "Tab switch detected")
+    } else {
+      setIsTabActive(true)
     }
+  }
 
-    const handleWindowBlur = () => {
-      const warning = `⚠️ Window focus lost at ${new Date().toLocaleTimeString()}`
-      setTabSwitchWarnings(prev => [...prev, warning])
+  const handleWindowBlur = () => {
+    const now = Date.now()
+    if (now - lastFocusTime > 500) { // Ignore rapid blur/focus
+      logViolation("window_blur", "Window focus lost (extension/popup)")
     }
+  }
 
-    if (interviewStarted) {
-      document.addEventListener('visibilitychange', handleVisibilityChange)
-      window.addEventListener('blur', handleWindowBlur)
+  const handleWindowFocus = () => {
+    lastFocusTime = Date.now()
+    setIsTabActive(true)
+  }
 
-      return () => {
-        document.removeEventListener('visibilitychange', handleVisibilityChange)
-        window.removeEventListener('blur', handleWindowBlur)
-      }
+  // Mouse leave detection for extension popups
+  const handleMouseLeave = (e: MouseEvent) => {
+    if (e.clientY < 0) { // Mouse went to top (likely extension)
+      logViolation("mouse_leave", "Mouse left to top area (possible extension)")
     }
-  }, [interviewStarted])
+  }
 
-  useEffect(() => {
-    const fetchTranscript = async () => {
-      try {
-      console.log("🔍 Fetching transcript...")
-      const res = await fetch("http://localhost:5000/api/transcript")
-      
-      if (!res.ok) {
-        console.error("❌ Transcript fetch failed:", res.status, res.statusText)
-        return
-      }
-      
-      const data = await res.json()
-      console.log("📝 Raw transcript data:", data)
-      
-      if (data.transcript && data.transcript.length > 0) {
-        console.log("✅ Setting transcript with", data.transcript.length, "entries")
-        setTranscript(data.transcript)
-      } else {
-        console.log("📭 No transcript entries found")
-      }
-    } catch (err) {
-      console.error("❌ Failed to fetch transcript:", err)
+  // Keyboard shortcut detection
+  const handleKeyDown = (e: KeyboardEvent) => {
+    // Common extension shortcuts
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'e' || e.key === 'b')) {
+      logViolation("keyboard_shortcut", "Suspicious keyboard shortcut detected")
     }
   }
 
   if (interviewStarted) {
-    // Fetch immediately
-    fetchTranscript()
-    
-    // Then fetch every 3 seconds
-    const interval = setInterval(fetchTranscript, 3000)
-    return () => clearInterval(interval)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('blur', handleWindowBlur)
+    window.addEventListener('focus', handleWindowFocus)
+    document.addEventListener('mouseleave', handleMouseLeave)
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('blur', handleWindowBlur)
+      window.removeEventListener('focus', handleWindowFocus)
+      document.removeEventListener('mouseleave', handleMouseLeave)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
   }
 }, [interviewStarted])
 
-  
+  useEffect(() => {
+    const fetchTranscript = async () => {
+      try {
+        console.log("🔍 Fetching transcript...")
+        const res = await fetch("http://localhost:5000/api/transcript")
+
+        if (!res.ok) {
+          console.error("❌ Transcript fetch failed:", res.status, res.statusText)
+          return
+        }
+
+        const data = await res.json()
+        console.log("📝 Raw transcript data:", data)
+
+        if (data.transcript && data.transcript.length > 0) {
+          console.log("✅ Setting transcript with", data.transcript.length, "entries")
+          setTranscript(data.transcript)
+        } else {
+          console.log("📭 No transcript entries found")
+        }
+      } catch (err) {
+        console.error("❌ Failed to fetch transcript:", err)
+      }
+    }
+
+    if (interviewStarted) {
+      // Fetch immediately
+      fetchTranscript()
+
+      // Then fetch every 3 seconds
+      const interval = setInterval(fetchTranscript, 3000)
+      return () => clearInterval(interval)
+    }
+  }, [interviewStarted])
+
+
 
   // Also add this debug useEffect to monitor transcript changes:
   useEffect(() => {
-  console.log("📋 Transcript updated:", transcript.length, "entries", transcript)
+    console.log("📋 Transcript updated:", transcript.length, "entries", transcript)
   }, [transcript])
 
 
@@ -352,15 +391,15 @@ export default function GoogleMeetInterview() {
       const data = await res.json()
       console.log("📦 Backend evaluation:", data)
 
-    const finalOutput = data.output || "✅ Code submitted successfully"
-    setOutput(finalOutput)
+      const finalOutput = data.output || "✅ Code submitted successfully"
+      setOutput(finalOutput)
 
-    
 
-    // Now inform backend to continue the interview
-    await fetch("http://localhost:5000/api/process-speech", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+
+      // Now inform backend to continue the interview
+      await fetch("http://localhost:5000/api/process-speech", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: "done_coding" }),
     })
 
@@ -414,6 +453,27 @@ export default function GoogleMeetInterview() {
       </div>
     )
   }
+  const runCode = async () => {
+    setOutput("⚙️ Running code...");
+
+    try {
+      const res = await fetch("http://localhost:5000/api/submit-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code,
+          language: selectedLanguage,
+        }),
+      });
+
+      const data = await res.json();
+      setOutput(data.output || "✅ Code ran successfully.");
+    } catch (err) {
+      console.error("❌ Code run error:", err);
+      setOutput("❌ Failed to run code. Check console.");
+    }
+  };
+
 
   if (showCodeEditor) {
     return (
@@ -437,6 +497,8 @@ export default function GoogleMeetInterview() {
     )
   }
 
+
+  
   return (
     <div className="flex flex-col h-screen bg-gray-900">
       {(warnings.length > 0 || tabSwitchWarnings.length > 0) && (
@@ -495,17 +557,7 @@ export default function GoogleMeetInterview() {
         
          
 
-        {/* Top Bar */}
-        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-black/50 backdrop-blur-sm rounded-full px-4 py-2">
-          <div className="flex items-center space-x-2 text-white">
-            <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-            <span className="text-sm font-medium">
-              Technical Interview - Stage: {interviewStatus.stage}
-            </span>
-            <Users className="w-4 h-4" />
-            <span className="text-sm">2</span>
-          </div>
-        </div>
+        
       </div>
 
       {/* Control Bar */}
