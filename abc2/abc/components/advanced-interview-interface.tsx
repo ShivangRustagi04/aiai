@@ -5,13 +5,14 @@ import { Button } from "@/components/ui/button"
 import CodeEditor from "@/components/code-editor"
 import AIInterviewerAvatar from "@/components/ai-interviewer-avatar"
 import TranscriptFooter from "./TranscriptFooter"
-
+// ✅ After imports, before `export default function...`
 declare global {
   interface Window {
     webkitSpeechRecognition: any;
     SpeechRecognition: any;
   }
 }
+
 
 export default function GoogleMeetInterview() {
   const [isMuted, setIsMuted] = useState(false)
@@ -22,25 +23,26 @@ export default function GoogleMeetInterview() {
   const [showCodeEditor, setShowCodeEditor] = useState(false)
   const [code, setCode] = useState("// Write your code here...")
   const [output, setOutput] = useState("")
-  const mediaStreamRef = useRef<MediaStream | null>(null)
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [question, setQuestion] = useState("")
   const [warnings, setWarnings] = useState<string[]>([])
   const [transcript, setTranscript] = useState<Message[]>([])
   const [tabSwitchWarnings, setTabSwitchWarnings] = useState<string[]>([])
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+
+  
   const [isTabActive, setIsTabActive] = useState(true)
+
   const [waiting, setWaiting] = useState(false)
+
   const [gotResponse, setGotResponse] = useState(false)
 
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-
-  interface Message {
-    speaker: "AI" | "User"
-    message: string
-    timestamp: number
+  const handleUserSend = (message: string) => {
+    console.log("User said:", message)
   }
 
   const [interviewStatus, setInterviewStatus] = useState({
+
     active: false,
     stage: 'not_started',
     skill_questions_asked: 0,
@@ -49,10 +51,15 @@ export default function GoogleMeetInterview() {
     current_question: null
   })
 
-  const handleUserSend = (message: string) => {
-    console.log("User said:", message)
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  interface Message {
+    speaker: "AI" | "User"
+    message: string
+    timestamp: number
   }
 
+
+  // Fetch interview status every 3 seconds
   const fetchInterviewStatus = async () => {
     try {
       const res = await fetch("http://localhost:5000/api/interview-status")
@@ -60,6 +67,7 @@ export default function GoogleMeetInterview() {
       console.log("📊 Interview Status:", data)
       setInterviewStatus(data)
       
+      // Auto-transition to code editor if backend moved to coding stage
       if (data.stage === 'coding_challenges' && !showCodeEditor && data.current_question) {
         console.log("🚀 Auto-opening code editor with question:", data.current_question)
         setQuestion(data.current_question)
@@ -70,6 +78,7 @@ export default function GoogleMeetInterview() {
     }
   }
 
+  // Fetch coding question
   const fetchCodingQuestion = async () => {
     try {
       const res = await fetch("http://localhost:5000/api/current-coding-question")
@@ -89,11 +98,16 @@ export default function GoogleMeetInterview() {
     }
   }
 
+
+  
+
+  // Handle clicking on Code Editor button
   const handleCodeEditorClick = async () => {
     try {
       console.log("🔵 Code Editor button clicked")
       console.log("Current interview status:", interviewStatus)
 
+      // Check if we're already in coding stage
       if (interviewStatus.stage === 'coding_challenges') {
         console.log("✅ Already in coding stage, fetching question...")
         const fetchedQuestion = await fetchCodingQuestion()
@@ -106,6 +120,7 @@ export default function GoogleMeetInterview() {
         return
       }
 
+      // If not in coding stage, try to trigger transition
       console.log("🚀 Triggering transition to coding stage...")
       const triggerRes = await fetch("http://localhost:5000/api/process-speech", {
         method: "POST",
@@ -119,12 +134,14 @@ export default function GoogleMeetInterview() {
       if (triggerData.question) {
         setQuestion(triggerData.question)
         setShowCodeEditor(true)
+        // Update local status immediately
         setInterviewStatus(prev => ({
           ...prev,
           stage: 'coding_challenges',
           current_question: triggerData.question
         }))
       } else {
+        // Wait a moment and fetch status
         setTimeout(async () => {
           await fetchInterviewStatus()
           const fetchedQuestion = await fetchCodingQuestion()
@@ -134,24 +151,207 @@ export default function GoogleMeetInterview() {
           }
         }, 1000)
       }
+
     } catch (err) {
       console.error("❌ Error during code editor activation:", err)
       alert("Something went wrong while switching to coding. Check backend.")
     }
   }
 
+  // Toggle Mute
   const toggleMute = () => setIsMuted(!isMuted)
 
+  // Toggle Video
   const toggleVideo = () => setIsVideoOff(!isVideoOff)
 
   const handleEndCall = () => {
-    setInterviewStarted(false)
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track: MediaStreamTrack) => track.stop());
+    setInterviewStarted(false);
+    setShowOutro(true);
+
+    // 🛑 Stop all media tracks
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => {
+        track.stop();
+      });
+      mediaStreamRef.current = null;
+    }
+  };
+
+
+  // Start Interview
+  useEffect(() => {
+    if (interviewStarted && !showCodeEditor) {
+      fetch("http://localhost:5000/api/start-interview", { method: "POST" })
+        .then(res => res.json())
+        .then(data => {
+          if (data?.message) console.log("Interview started:", data.message)
+          fetchInterviewStatus()
+        })
+        .catch(() => console.error("❌ Failed to start interview"))
+    }
+  }, [interviewStarted])
+
+  // Replace your transcript fetching useEffect in advanced-interview-interface.tsx with this:
+
+
+  // Tab switch detection
+  // Tab switch detection - REPLACE YOUR EXISTING ONE
+  // Enhanced tab/extension detection
+useEffect(() => {
+  let lastFocusTime = Date.now()
+  let violationCooldown = false
+
+  const logViolation = (type: string, message: string) => {
+    if (violationCooldown) return // Prevent spam
+    
+    violationCooldown = true
+    setTimeout(() => violationCooldown = false, 1000) // 1 second cooldown
+    
+    const warning = `⚠️ ${message} at ${new Date().toLocaleTimeString()}`
+    setTabSwitchWarnings(prev => [...prev, warning])
+    
+    fetch("http://localhost:5000/api/log-warning", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        type: type, 
+        timestamp: Date.now(),
+        message: message
+      })
+    }).catch(console.error)
+  }
+
+  const handleVisibilityChange = () => {
+    if (document.hidden) {
+      setIsTabActive(false)
+      logViolation("tab_switch", "Tab switch detected")
+    } else {
+      setIsTabActive(true)
     }
   }
-  
+
+  const handleWindowBlur = () => {
+    const now = Date.now()
+    if (now - lastFocusTime > 500) { // Ignore rapid blur/focus
+      logViolation("window_blur", "Window focus lost (extension/popup)")
+    }
+  }
+
+  const handleWindowFocus = () => {
+    lastFocusTime = Date.now()
+    setIsTabActive(true)
+  }
+
+  // Mouse leave detection for extension popups
+  const handleMouseLeave = (e: MouseEvent) => {
+    if (e.clientY < 0) { // Mouse went to top (likely extension)
+      logViolation("mouse_leave", "Mouse left to top area (possible extension)")
+    }
+  }
+
+  // Keyboard shortcut detection
+  const handleKeyDown = (e: KeyboardEvent) => {
+    // Common extension shortcuts
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'e' || e.key === 'b')) {
+      logViolation("keyboard_shortcut", "Suspicious keyboard shortcut detected")
+    }
+  }
+
+  if (interviewStarted) {
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('blur', handleWindowBlur)
+    window.addEventListener('focus', handleWindowFocus)
+    document.addEventListener('mouseleave', handleMouseLeave)
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('blur', handleWindowBlur)
+      window.removeEventListener('focus', handleWindowFocus)
+      document.removeEventListener('mouseleave', handleMouseLeave)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }
+}, [interviewStarted])
+
+  useEffect(() => {
+    const fetchTranscript = async () => {
+      try {
+        console.log("🔍 Fetching transcript...")
+        const res = await fetch("http://localhost:5000/api/transcript")
+
+        if (!res.ok) {
+          console.error("❌ Transcript fetch failed:", res.status, res.statusText)
+          return
+        }
+
+        const data = await res.json()
+        console.log("📝 Raw transcript data:", data)
+
+        if (data.transcript && data.transcript.length > 0) {
+          console.log("✅ Setting transcript with", data.transcript.length, "entries")
+          setTranscript(data.transcript)
+        } else {
+          console.log("📭 No transcript entries found")
+        }
+      } catch (err) {
+        console.error("❌ Failed to fetch transcript:", err)
+      }
+    }
+
+    if (interviewStarted) {
+      // Fetch immediately
+      fetchTranscript()
+
+      // Then fetch every 3 seconds
+      const interval = setInterval(fetchTranscript, 3000)
+      return () => clearInterval(interval)
+    }
+  }, [interviewStarted])
+
+
+
+  // Also add this debug useEffect to monitor transcript changes:
+  useEffect(() => {
+    console.log("📋 Transcript updated:", transcript.length, "entries", transcript)
+  }, [transcript])
+
+
+  // Start camera feed
+  useEffect(() => {
+    if (interviewStarted && !isVideoOff) {
+      navigator.mediaDevices
+        .getUserMedia({ video: true, audio: true })
+        .then((stream) => {
+          if (videoRef.current) {
+            (videoRef.current as HTMLVideoElement).srcObject = stream;
+          }
+        })
+        .catch((err) => console.log("Camera access denied:", err));
+    }
+  }, [interviewStarted, isVideoOff]);
+
+
+  // Re-init camera when returning from IDE
+  useEffect(() => {
+    const initializeMedia = async () => {
+      if (!videoRef.current || isVideoOff || mediaStreamRef.current) return
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        videoRef.current.srcObject = stream;
+        mediaStreamRef.current = stream;
+      } catch (err) {
+        console.error("Camera access denied:", err)
+      }
+    }
+
+    if (interviewStarted && !showCodeEditor) {
+      initializeMedia()
+    }
+  }, [interviewStarted, isVideoOff, showCodeEditor])
+
+
   const listenToUser = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) return alert("Speech recognition not supported");
@@ -184,6 +384,7 @@ export default function GoogleMeetInterview() {
     recognition.start();
   };
 
+  // Submit code to backend
   const submitCode = async () => {
     setIsSubmitted(true)
     setOutput("🚀 Submitting code...")
@@ -204,19 +405,65 @@ export default function GoogleMeetInterview() {
       const finalOutput = data.output || "✅ Code submitted successfully"
       setOutput(finalOutput)
 
+
+
+      // Now inform backend to continue the interview
       await fetch("http://localhost:5000/api/process-speech", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: "done_coding" }),
-      })
+      body: JSON.stringify({ text: "done_coding" }),
+    })
 
-      setShowCodeEditor(false)
-    } catch (err) {
-      console.error("❌ Code submission error:", err)
-      setOutput("❌ Submission failed. Check console.")
-    }
+    setShowCodeEditor(false)
+
+  } catch (err) {
+    console.error("❌ Code submission error:", err)
+    setOutput("❌ Submission failed. Check console.")
   }
+}
 
+
+  // Poll interview status
+  useEffect(() => {
+    if (interviewStarted) {
+      const interval = setInterval(fetchInterviewStatus, 3000)
+      return () => clearInterval(interval)
+    }
+  }, [interviewStarted])
+
+  // Poll tab/camera warnings
+  useEffect(() => {
+    const pollWarnings = () => {
+      fetch("http://localhost:5000/api/interview-warnings")
+        .then(res => res.json())
+        .then(data => {
+          if (data?.warnings) setWarnings(data.warnings)
+        })
+        .catch(() => { })
+    }
+    const interval = setInterval(pollWarnings, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // Debug logging for status changes
+  useEffect(() => {
+    console.log("🔄 Interview Status Changed:", interviewStatus)
+  }, [interviewStatus])
+
+  if (!interviewStarted) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen bg-gray-900 text-white">
+        <Button
+          onClick={() => setInterviewStarted(true)}
+          className="absolute top-4 right-4 bg-blue-600 hover:bg-blue-700"
+        >
+          Start Interview
+        </Button>
+        <h1 className="text-2xl font-bold mb-4">Welcome to the AI Interview</h1>
+        <p className="text-gray-400">Click the button above to begin.</p>
+      </div>
+    )
+  }
   const runCode = async () => {
     setOutput("⚙️ Running code...");
 
@@ -238,208 +485,6 @@ export default function GoogleMeetInterview() {
     }
   };
 
-  // Initialize media stream
-  const initializeMediaStream = async () => {
-    try {
-      // Stop any existing stream first
-      if (videoRef.current?.srcObject) {
-        const existingStream = videoRef.current.srcObject as MediaStream;
-        existingStream.getTracks().forEach(track => track.stop());
-      }
-
-      // Always request video, regardless of isVideoOff state during interview
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: true, 
-        audio: !isMuted 
-      });
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        mediaStreamRef.current = stream;
-      }
-    } catch (err) {
-      console.error("Error accessing media devices:", err);
-    }
-  };
-
-useEffect(() => {
-  if (interviewStarted) {
-    initializeMediaStream();
-  }
-
-  return () => {
-    if (videoRef.current?.srcObject && !interviewStarted) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-    }
-  };
-}, [interviewStarted, isMuted]); // Removed isVideoOff from dependencies
-
-  // Effects
-  useEffect(() => {
-    if (interviewStarted && !showCodeEditor) {
-      fetch("http://localhost:5000/api/start-interview", { method: "POST" })
-        .then(res => res.json())
-        .then(data => {
-          if (data?.message) console.log("Interview started:", data.message)
-          fetchInterviewStatus()
-        })
-        .catch(() => console.error("❌ Failed to start interview"))
-    }
-  }, [interviewStarted])
-
-  useEffect(() => {
-    const fetchTranscript = async () => {
-      try {
-        console.log("🔍 Fetching transcript...")
-        const res = await fetch("http://localhost:5000/api/transcript")
-
-        if (!res.ok) {
-          console.error("❌ Transcript fetch failed:", res.status, res.statusText)
-          return
-        }
-
-        const data = await res.json()
-        console.log("📝 Raw transcript data:", data)
-
-        if (data.transcript && data.transcript.length > 0) {
-          console.log("✅ Setting transcript with", data.transcript.length, "entries")
-          setTranscript(data.transcript)
-        } else {
-          console.log("📭 No transcript entries found")
-        }
-      } catch (err) {
-        console.error("❌ Failed to fetch transcript:", err)
-      }
-    }
-
-    if (interviewStarted) {
-      fetchTranscript()
-      const interval = setInterval(fetchTranscript, 3000)
-      return () => clearInterval(interval)
-    }
-  }, [interviewStarted])
-
-  useEffect(() => {
-    console.log("📋 Transcript updated:", transcript.length, "entries", transcript)
-  }, [transcript])
-
-  useEffect(() => {
-    initializeMediaStream();
-  }, [interviewStarted, isVideoOff, isMuted]);
-
-  useEffect(() => {
-    let lastFocusTime = Date.now()
-    let violationCooldown = false
-
-    const logViolation = (type: string, message: string) => {
-      if (violationCooldown) return
-      
-      violationCooldown = true
-      setTimeout(() => violationCooldown = false, 1000)
-      
-      const warning = `⚠️ ${message} at ${new Date().toLocaleTimeString()}`
-      setTabSwitchWarnings(prev => [...prev, warning])
-      
-      fetch("http://localhost:5000/api/log-warning", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          type: type, 
-          timestamp: Date.now(),
-          message: message
-        })
-      }).catch(console.error)
-    }
-
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        setIsTabActive(false)
-        logViolation("tab_switch", "Tab switch detected")
-      } else {
-        setIsTabActive(true)
-      }
-    }
-
-    const handleWindowBlur = () => {
-      const now = Date.now()
-      if (now - lastFocusTime > 500) {
-        logViolation("window_blur", "Window focus lost (extension/popup)")
-      }
-    }
-
-    const handleWindowFocus = () => {
-      lastFocusTime = Date.now()
-      setIsTabActive(true)
-    }
-
-    const handleMouseLeave = (e: MouseEvent) => {
-      if (e.clientY < 0) {
-        logViolation("mouse_leave", "Mouse left to top area (possible extension)")
-      }
-    }
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'e' || e.key === 'b')) {
-        logViolation("keyboard_shortcut", "Suspicious keyboard shortcut detected")
-      }
-    }
-
-    if (interviewStarted) {
-      document.addEventListener('visibilitychange', handleVisibilityChange)
-      window.addEventListener('blur', handleWindowBlur)
-      window.addEventListener('focus', handleWindowFocus)
-      document.addEventListener('mouseleave', handleMouseLeave)
-      document.addEventListener('keydown', handleKeyDown)
-
-      return () => {
-        document.removeEventListener('visibilitychange', handleVisibilityChange)
-        window.removeEventListener('blur', handleWindowBlur)
-        window.removeEventListener('focus', handleWindowFocus)
-        document.removeEventListener('mouseleave', handleMouseLeave)
-        document.removeEventListener('keydown', handleKeyDown)
-      }
-    }
-  }, [interviewStarted])
-
-  useEffect(() => {
-    if (interviewStarted) {
-      const interval = setInterval(fetchInterviewStatus, 3000)
-      return () => clearInterval(interval)
-    }
-  }, [interviewStarted])
-
-  useEffect(() => {
-    const pollWarnings = () => {
-      fetch("http://localhost:5000/api/interview-warnings")
-        .then(res => res.json())
-        .then(data => {
-          if (data?.warnings) setWarnings(data.warnings)
-        })
-        .catch(() => { })
-    }
-    const interval = setInterval(pollWarnings, 5000)
-    return () => clearInterval(interval)
-  }, [])
-
-  useEffect(() => {
-    console.log("🔄 Interview Status Changed:", interviewStatus)
-  }, [interviewStatus])
-
-  if (!interviewStarted) {
-    return (
-      <div className="flex flex-col items-center justify-center h-screen bg-gray-900 text-white">
-        <Button
-          onClick={() => setInterviewStarted(true)}
-          className="absolute top-4 right-4 bg-blue-600 hover:bg-blue-700"
-        >
-          Start Interview
-        </Button>
-        <h1 className="text-2xl font-bold mb-4">Welcome to the AI Interview</h1>
-        <p className="text-gray-400">Click the button above to begin.</p>
-      </div>
-    )
-  }
 
   if (showCodeEditor) {
     return (
@@ -448,23 +493,23 @@ useEffect(() => {
           code={code}
           language={selectedLanguage}
           onChange={setCode}
-          onLanguageChange={setSelectedLanguage}
           onRun={runCode}
           onSubmit={submitCode}
           output={output}
           isSubmitted={isSubmitted}
           question={question}
-          videoRef={videoRef}
+          videoRef={videoRef} 
           isVideoOff={isVideoOff}
           isMuted={isMuted}
           isAISpeaking={isAISpeaking}
           isAIListening={!isAISpeaking}
-          mediaStreamRef={mediaStreamRef}
         />
       </div>
     )
   }
 
+
+  
   return (
     <div className="flex flex-col h-screen bg-gray-900">
       {(warnings.length > 0 || tabSwitchWarnings.length > 0) && (
@@ -520,6 +565,10 @@ useEffect(() => {
             />
           </div>
         </div>
+        
+         
+
+        
       </div>
 
       {/* Control Bar */}
@@ -569,8 +618,13 @@ useEffect(() => {
       {interviewStarted && (
           <TranscriptFooter
             transcript={transcript}
+            onSendMessage={handleUserSend}
+            waitingForResponse={waiting}
+            isAISpeaking={isAISpeaking}
+            messageReceived={gotResponse}
           />
       )}
+
     </div>
   )
 }
