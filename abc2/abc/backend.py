@@ -3,32 +3,24 @@ import re
 import random
 import time
 import speech_recognition as sr
-from gtts import gTTS
 import pygame
-import queue
-from io import BytesIO
 import google.generativeai as genai
 from dotenv import load_dotenv
 import cv2
+import mediapipe as mp
+from scipy.spatial import distance as dist
 import numpy as np
 from docx import Document
 import pygetwindow as gw
 import threading
-import wave
 from scipy.io import wavfile
 import subprocess
 import tempfile
-import sys
 import boto3
 from sentence_transformers import SentenceTransformer
 import faiss
 import json
-from shared_state import save_to_conversation_history
-
-
 from datetime import datetime, timedelta
-
-
 
 # Load environment variables
 load_dotenv()
@@ -43,33 +35,56 @@ class ExpertTechnicalInterviewer:
 
             genai.configure(api_key=self.api_key)
             self.model = genai.GenerativeModel(model)
+            self.chat = self.model.start_chat(history=[])
             self.interview_state = "introduction"
             self.skill_questions_asked = 0
             self.latest_code_submission = None
             self.last_question = None
             self.just_repeated = False
+            self.cap = None
+            self.latest_code_submission = None
             self.current_domain = None
             self.conversation_history = []
             self.recognizer = sr.Recognizer()
             self.microphone = sr.Microphone()
             self.is_listening = False
             self.interrupted = False
+            self.camera_active = True
             self.recognizer.pause_threshold = 0.6
             self.recognizer.phrase_threshold = 0.2
             self.tone_warnings = 0
             self.cheating_warnings = 0
+            self.mp_face_mesh = mp.solutions.face_mesh
+            self.face_mesh = self.mp_face_mesh.FaceMesh(
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+            self.EYE_AR_THRESH = 0.25  # Eye aspect ratio threshold
+            self.EYE_AR_CONSEC_FRAMES = 10  # Frames threshold for looking away
+            self.gaze_counter = 0
+            self.looking_away = False
+             # Start monitoring threads
+            self.monitoring_active = True
+            self.last_question = None
+            self.face_monitor_thread = threading.Thread(target=self._monitor_face_and_gaze)
+            self.face_monitor_thread.daemon = True
+            self.face_monitor_thread.start()
+            
+            self.tab_monitor_thread = threading.Thread(target=self._monitor_tab_changes)
+            self.tab_monitor_thread.daemon = True
+            self.tab_monitor_thread.start()
             self.question_count = 0
             self.filler_phrases = [
                 "I see...", "Interesting...", "That makes sense...", 
                 "Go on...", "Yes, I understand...", "Right...",
                 "Okay...", "Hmm...", "Got it...", "Please continue..."
             ]
-            self.tab_monitor_ready = False
+            self.tab_monitor_thread = False
             self.last_face_detection_time = time.time()
             self.tab_change_detected = False
             self.response_delay = 0.3
             self.accent = accent.lower()
-            self.interview_active = True
+            self.interview_state = True
             self.coding_questions_asked = 0
             self.max_coding_questions = 2
             self.polly = boto3.client(
@@ -124,22 +139,69 @@ class ExpertTechnicalInterviewer:
             except pygame.error as e:
                 print(f"PyGame mixer initialization failed: {e}")
                 raise RuntimeError("Audio system initialization failed")
-                
-            # Start monitoring threads
-            self.monitoring_active = True
-            self.last_question = None
-            #self.face_monitor_thread = threading.Thread(target=self._monitor_face_and_attention)
-            #self.face_monitor_thread.daemon = True
-            #self.face_monitor_thread.start()
-            
-            self.tab_monitor_thread = threading.Thread(target=self._monitor_tab_changes)
-            self.tab_monitor_thread.daemon = True
-            self.tab_monitor_thread.start()
-
         except Exception as e:
             print(f"Initialization error: {e}")
             raise
+    def _eye_aspect_ratio(self, eye):
+        A = dist.euclidean(eye[1], eye[5])
+        B = dist.euclidean(eye[2], eye[4])
+        C = dist.euclidean(eye[0], eye[3])
 
+        # Compute the eye aspect ratio
+        ear = (A + B) / (2.0 * C)
+        return ear
+
+    def _monitor_face_and_gaze(self):
+        """Enhanced face and gaze monitoring with MediaPipe"""
+        while self.monitoring_active and self.interview_state:
+            if not self.camera_active or not self.cap:
+                time.sleep(0.2)
+                continue
+
+            ret, frame = self.cap.read()
+            if not ret:
+                continue
+
+            # Convert to RGB for MediaPipe
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = self.face_mesh.process(frame_rgb)
+
+            if not results.multi_face_landmarks:
+                self._handle_cheating_attempt("no_face")
+                continue
+
+            for face_landmarks in results.multi_face_landmarks:
+                # Get eye landmarks
+                left_eye = []
+                right_eye = []
+                
+                # Left eye landmarks (indices 33, 160, 158, 133, 153, 144)
+                for idx in [33, 160, 158, 133, 153, 144]:
+                    landmark = face_landmarks.landmark[idx]
+                    left_eye.append((landmark.x, landmark.y))
+                
+                # Right eye landmarks (indices 362, 385, 387, 263, 373, 380)
+                for idx in [362, 385, 387, 263, 373, 380]:
+                    landmark = face_landmarks.landmark[idx]
+                    right_eye.append((landmark.x, landmark.y))
+                
+                # Calculate eye aspect ratio
+                left_ear = self._eye_aspect_ratio(left_eye)
+                right_ear = self._eye_aspect_ratio(right_eye)
+                avg_ear = (left_ear + right_ear) / 2.0
+
+                # Check if eyes are closed or looking away
+                if avg_ear < self.EYE_AR_THRESH:
+                    self.gaze_counter += 1
+                    
+                    if self.gaze_counter >= self.EYE_AR_CONSEC_FRAMES and not self.looking_away:
+                        self.looking_away = True
+                        self._handle_cheating_attempt("looking_away")
+                else:
+                    self.gaze_counter = 0
+                    self.looking_away = False
+
+            time.sleep(0.1)  # Reduce CPU usage
     def _check_time_remaining(self, section=None):
         """Check remaining time for current section or total interview"""
         if not self.interview_start_time:
@@ -178,7 +240,7 @@ class ExpertTechnicalInterviewer:
         """Adjust interview flow based on remaining time"""
         remaining = self._check_time_remaining()
         if remaining <= 0:
-            self.interview_active = False
+            self.interview_state = False
             return False
             
         # If we're running short on time, skip to next phase
@@ -203,11 +265,13 @@ class ExpertTechnicalInterviewer:
             followup = self._coding_followup(code_string, self._identify_language_from_code(code_string))
             if followup:
                 self.speak(followup, interruptible=False)
-                time.sleep(1)
+                time.sleep(0.2)
                 answer = self.listen()
                 if answer:
-                    save_to_conversation_history("user", f"[Follow-up Answer]\n{answer}"
-                    )
+                    self.conversation_history.append({
+                        "role": "user", 
+                        "content": f"[Follow-up Answer]\n{answer}"
+                    })
 
     def _identify_language_from_code(self, code):
         """Simple language detection from code snippet"""
@@ -222,7 +286,7 @@ class ExpertTechnicalInterviewer:
         return "Python"  # default
 
     def wait_after_speaking(self, message, base=0.6, per_word=0.15):
-        time.sleep(1)  # Always wait 1 second after speaking
+        time.sleep(0.2)  # Always wait 1 second after speaking
 
     def _give_small_hint(self, question_text):
         hint_prompt = f"""You are an AI coding interviewer. Give a small hint for the following problem.
@@ -464,17 +528,17 @@ class ExpertTechnicalInterviewer:
                 self._conduct_question_phase(is_tech_interview)
             
             # Coding Challenge Section (20 minutes, tech interviews only)
-            if is_tech_interview and self.interview_active:
+            if is_tech_interview and self.interview_state:
                 self._start_section("coding_challenge")
                 self._conduct_coding_challenge()
             
             # Doubt Clearing Section (10 minutes)
-            if self.interview_active:
+            if self.interview_state:
                 self._start_section("doubt_clearing")
                 self._conduct_doubt_clearing(is_tech_interview)
             
             # Closing Section (3 minutes)
-            if self.interview_active:
+            if self.interview_state:
                 self._start_section("closing")
                 self._conduct_closing(is_tech_interview)
                 
@@ -482,8 +546,8 @@ class ExpertTechnicalInterviewer:
             print(f"Interview error: {e}")
             self.speak("We've encountered a technical issue, but thank you for your participation today!", interruptible=False)
         finally:
-            self.interview_active = False
-            self.monitoring_active = False
+            self.interview_state = False
+            self.monitoring_active = True
             docx_path = self._save_transcription_to_docx()
             self._generate_feedback_from_docx(docx_path)
             self._stop_camera()
@@ -491,14 +555,14 @@ class ExpertTechnicalInterviewer:
     def _conduct_introduction(self):
         """Handle the introduction section (5 minutes)"""
         self.speak("Hello! I am Gyani. Welcome to your interview session today. I'm excited to chat with you!", interruptible=False)
-        time.sleep(1)
+        time.sleep(0.2)
         msg = "Before we begin, how has your day been so far?"
         self.speak(msg, interruptible=False)
         self.wait_after_speaking(msg)
         day_response = self.listen()
 
         if day_response:
-            save_to_conversation_history("user", day_response)
+            self.conversation_history.append({"role": "user", "content": day_response})
             self.speak("That's great to hear! I appreciate you taking the time for this session.", interruptible=False)
 
         msg = "Now, could you please tell me your name and a bit about yourself?"
@@ -507,6 +571,7 @@ class ExpertTechnicalInterviewer:
         introduction = self.listen()
 
         if introduction:
+            self.conversation_history.append({"role": "user", "content": introduction})
             self.current_domain = self._identify_tech_domain(introduction)
 
     def _extract_years_experience(self, text):
@@ -553,6 +618,7 @@ class ExpertTechnicalInterviewer:
         background = self.listen()
 
         if background:
+            self.conversation_history.append({"role": "user", "content": background})
             self.current_domain = self._identify_tech_domain(background)
 
     def _should_transition_to_next_section(self, current_section):
@@ -585,7 +651,7 @@ class ExpertTechnicalInterviewer:
         """Ask client-provided questions or generate domain-specific ones"""
         if self.client_questions:
             self.speak("I have some specific questions provided for this interview. Let's begin with those.", interruptible=False)
-            time.sleep(1)
+            time.sleep(0.2)
             
             for question in self.client_questions[:]:
                 # Check if we should transition to next section
@@ -614,7 +680,7 @@ class ExpertTechnicalInterviewer:
         repeat_attempts = 0
         max_repeats = 2
 
-        while not answer_received and repeat_attempts < max_repeats and self.interview_active:
+        while not answer_received and repeat_attempts < max_repeats and self.interview_state:
             if not self.just_repeated:
                 self.speak(question)
                 self.wait_after_speaking(question)
@@ -632,7 +698,7 @@ class ExpertTechnicalInterviewer:
                     continue
                 else:
                     placeholder = "[Requested repeat too many times]"
-                    save_to_conversation_history("user", placeholder)
+                    self.conversation_history.append({"role": "user", "content": placeholder})
                     answer_received = True
 
             elif not answer or len(answer.split()) <= 3:
@@ -640,30 +706,30 @@ class ExpertTechnicalInterviewer:
                     self.speak("Could you please elaborate on that?", interruptible=False)
                 else:
                     placeholder = "[Unable to answer after multiple attempts]"
-                    save_to_conversation_history("user", placeholder)
+                    self.conversation_history.append({"role": "user", "content": placeholder})
                     answer_received = True
             
             elif answer and len(answer.split()) > 4:
-                
+                self.conversation_history.append({"role": "user", "content": answer})
                 answer_received = True
                 
                 # Ask follow-up question based on answer
                 followup = self._generate_followup_question(question, answer)
                 if followup and self._check_time_remaining("technical_questions") > 60:
                     self.speak(followup)
-                    self.wait_after_speaking(followup)
+                    time.sleep(0.2)
                     followup_answer = self.listen()
                     if followup_answer and len(followup_answer.split()) > 4:
-                        save_to_conversation_history("assistant", followup)
-                     
+                        self.conversation_history.append({"role": "assistant", "content": followup})
+                        self.conversation_history.append({"role": "user", "content": followup_answer})
 
                 
                 break
 
         if answer_received and not self.just_repeated:
             self.question_count += 1  # Increment only for original questions
-            save_to_conversation_history("assistant", question)
-            
+            self.conversation_history.append({"role": "assistant", "content": question})
+            self.conversation_history.append({"role": "user", "content": answer})
             self.just_repeated = False
 
     def _generate_followup_question(self, original_question, answer):
@@ -708,7 +774,7 @@ class ExpertTechnicalInterviewer:
             self.speak("Let's discuss your professional experience in more detail.", interruptible=False)
 
         while (question_count < max_questions and 
-            self.interview_active and 
+            self.interview_state and 
             not self._should_transition_to_next_section("technical_questions")):
             
             if len(self.conversation_history) > 15:
@@ -777,7 +843,7 @@ class ExpertTechnicalInterviewer:
                             continue
                         else:
                             placeholder = "[Requested repeat too many times]"
-                            save_to_conversation_history("user", placeholder)
+                            self.conversation_history.append({"role": "user", "content": placeholder})
                             answer_received = True
 
                     elif not answer or len(answer.split()) <= 3:
@@ -785,12 +851,11 @@ class ExpertTechnicalInterviewer:
                             self.speak("Could you please elaborate on that?", interruptible=False)
                         else:
                             placeholder = "[Unable to answer after multiple attempts]"
-                            save_to_conversation_history("user", placeholder)
+                            self.conversation_history.append({"role": "user", "content": placeholder})
                             answer_received = True
                     
                     elif answer and len(answer.split()) > 4:
-                     
-                     
+                        self.conversation_history.append({"role": "user", "content": answer})
                         answer_received = True
                         
                         feedback = random.choice([
@@ -801,32 +866,33 @@ class ExpertTechnicalInterviewer:
                             "That makes sense!"
                         ])
                         self.speak(feedback, interruptible=False)
-                        time.sleep(1)
+                        time.sleep(0.2)
                         
                         break
 
                 if answer_received:
                     self.question_count += 1
-                    save_to_conversation_history("assistant", msg)
-                  
-                  
+                    self.conversation_history.append({"role": "assistant", "content": msg})
+                    self.conversation_history.append({"role": "user", "content": answer})
                     self.just_repeated = False
 
     def _conduct_coding_challenge(self):
         """Conduct coding challenge section with time constraints"""
         self.speak("Great discussion! Now I'd like to give you a couple of coding challenges to see your problem-solving skills in action.", interruptible=False)
-        time.sleep(1)
+        time.sleep(0.2)
 
         while (self.coding_questions_asked < self.max_coding_questions and 
-               self.interview_active and 
+               self.interview_state and 
                self._check_time_remaining("coding_challenge") > 120):  # At least 2 minutes per question
             
             self.current_coding_question = self._generate_coding_question(self.current_domain or "python")
-            save_to_conversation_history("assistant", f"[Coding Challenge Question]\n{self.current_coding_question}"
-            )
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": f"[Coding Challenge Question]\n{self.current_coding_question}"
+            })
 
             self.speak("I've prepared a coding challenge for you. Here's the problem:", interruptible=False)
-            time.sleep(1)
+            time.sleep(0.2)
             print(f"\nCoding Challenge: {self.current_coding_question}")
 
             self.coding_questions_asked += 1
@@ -834,21 +900,21 @@ class ExpertTechnicalInterviewer:
             start_time = time.time()
 
             while (self._check_time_remaining("coding_challenge") > 60 and 
-                   self.interview_active):
-                time.sleep(1)
+                   self.interview_state):
+                time.sleep(0.2)
                 
                 # Offer a hint after 2 minutes of inactivity
                 if not hint_offered and time.time() - start_time > 120:
                     self.speak("Would you like a small hint to help you get started?", interruptible=False)
-                    time.sleep(1)
+                    time.sleep(0.2)
                     response = self.listen()
                     if response and "yes" in response.lower():
                         self._give_small_hint(self.current_coding_question)
                     hint_offered = True
 
-            if not self.interview_active:
+            if not self.interview_state:
                 break
-            time.sleep(1)
+            time.sleep(0.2)
 
     def _coding_followup(self, code, language):
         """Ask follow-up questions about the code submitted by the candidate."""
@@ -879,7 +945,7 @@ class ExpertTechnicalInterviewer:
         """Conduct doubt clearing session with time constraints"""
         if is_tech_interview:
             self.speak("That was excellent! You've shown great technical knowledge and problem-solving skills.", interruptible=False)
-            time.sleep(1)
+            time.sleep(0.2)
 
             self.speak("Before we conclude, I'd like to offer you a chance to ask any technical questions you might have.", interruptible=False)
             self.speak("This could be about:", interruptible=False)
@@ -889,7 +955,7 @@ class ExpertTechnicalInterviewer:
             self.speak("4. Or anything else technical you'd like to discuss", interruptible=False)
         else:
             self.speak("That was excellent! You've shown great professional knowledge and problem-solving skills.", interruptible=False)
-            time.sleep(1)
+            time.sleep(0.2)
 
             self.speak("Before we conclude, I'd like to offer you a chance to ask any questions you might have about the role or industry.", interruptible=False)
             self.speak("This could be about:", interruptible=False)
@@ -905,7 +971,7 @@ class ExpertTechnicalInterviewer:
         timeout = time.time() + min(self._check_time_remaining("doubt_clearing"), 10 * 60)  # Max 10 minutes
 
         while (questions_asked < max_questions and 
-               self.interview_active and 
+               self.interview_state and 
                time.time() < timeout):
             question = self.listen()
             if question and len(question.split()) > 3:
@@ -978,7 +1044,7 @@ class ExpertTechnicalInterviewer:
             print(f"Camera restart failed: {e}")
 
     def _monitor_tab_changes(self):
-        while not self.tab_monitor_ready:
+        while not self.tab_monitor_thread:
             time.sleep(0.5)
         
         try:
@@ -990,7 +1056,7 @@ class ExpertTechnicalInterviewer:
         
         warning_given = False
         
-        while self.monitoring_active and self.interview_active:
+        while self.monitoring_active and self.interview_state:
             try:
                 current_window = gw.getActiveWindow()
                 current_title = current_window.title if current_window else initial_title
@@ -1022,11 +1088,14 @@ class ExpertTechnicalInterviewer:
         
         if self.cheating_warnings >= 3:
             self.speak("Multiple concerning behaviors detected. The interview will now conclude.", interruptible=False)
-            self.interview_active = False
+            self.interview_state = False
             return
             
         responses = {
-            "tab_change": "Please stay focused on the interview window and avoid switching to other applications."
+            "tab_change": "Please stay focused on the interview window and avoid switching to other applications.",
+            "no_face": "Please ensure your face is visible to the camera during the interview.",
+            "looking_away": "Please maintain eye contact with the screen during the interview.",
+            "no_eyes": "Please ensure your eyes are visible to the camera."
         }
         
         if cheat_type in responses:
@@ -1034,8 +1103,8 @@ class ExpertTechnicalInterviewer:
 
     def __del__(self):
         """Clean up resources"""
-        self.interview_active = False
-        self.monitoring_active = False
+        self.interview_state = False
+        self.monitoring_active = True
         self._stop_camera()
         if hasattr(self, 'face_monitor_thread'):
             self.face_monitor_thread.join(timeout=1)
@@ -1049,7 +1118,6 @@ class ExpertTechnicalInterviewer:
             return
 
         print(f"Interviewer: {text}")
-        save_to_conversation_history("assistant", text)
 
         try:
             response = self.polly.synthesize_speech(
@@ -1110,15 +1178,15 @@ class ExpertTechnicalInterviewer:
                         if tone != "professional":
                             self.handle_improper_tone(tone)
                             placeholder = "[Response had non-professional tone]"
-                            save_to_conversation_history("user", placeholder)
+                            self.conversation_history.append({"role": "user", "content": placeholder})
                             return placeholder
                         
                         if text.strip():
-                            save_to_conversation_history("user", text)
+                            self.conversation_history.append({"role": "user", "content": text})
                             return text
                         else:
                             placeholder = "[Unclear response]"
-                            save_to_conversation_history("user", placeholder)
+                            self.conversation_history.append({"role": "user", "content": placeholder})
                             return placeholder
                             
                     except sr.WaitTimeoutError:
@@ -1144,12 +1212,12 @@ class ExpertTechnicalInterviewer:
                 print(f"Microphone access error: {e}")
                 self.speak("I'm having trouble accessing the microphone. Please check your microphone settings.", interruptible=False)
                 placeholder = "[Microphone issue]"
-                save_to_conversation_history("user", placeholder)
+                self.conversation_history.append({"role": "user", "content": placeholder})
                 return placeholder
         
         # If all attempts fail
         placeholder = "[Response unclear after multiple attempts]"
-        save_to_conversation_history("user", placeholder)
+        self.conversation_history.append({"role": "user", "content": placeholder})
         self.speak("Let's continue with the next part of our interview.", interruptible=False)
         return placeholder
 
@@ -1217,7 +1285,7 @@ class ExpertTechnicalInterviewer:
         if tone in responses:
             response = random.choice(responses[tone])
             self.speak(response, interruptible=False)
-            time.sleep(1)
+            time.sleep(0.2)
 
     def query_gemini(self, prompt):
         try:
@@ -1354,7 +1422,7 @@ class ExpertTechnicalInterviewer:
         # Start tab monitoring
         def enable_tab_monitor():
             time.sleep(3)
-            self.tab_monitor_ready = True
+            self.tab_monitor_thread = True
 
         threading.Thread(target=enable_tab_monitor, daemon=True).start()
 
@@ -1364,8 +1432,8 @@ class ExpertTechnicalInterviewer:
         interview_thread.start()
 
         # Keep the main thread alive while interview is active
-        while self.interview_active:
-            time.sleep(1)
+        while self.interview_state:
+            time.sleep(0.2)
 
 class RAGExpertTechnicalInterviewer(ExpertTechnicalInterviewer):
     def __init__(self, model="gemini-2.0-flash", accent="indian"):
