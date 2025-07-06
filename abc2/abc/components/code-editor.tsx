@@ -17,12 +17,12 @@ interface CodeEditorProps {
   output: string
   isSubmitted: boolean
   question?: string
-  videoRef?: React.RefObject<HTMLVideoElement|null>
+  videoRef?: React.RefObject<HTMLVideoElement>
   isVideoOff?: boolean
   isMuted?: boolean
   isAISpeaking?: boolean
   isAIListening?: boolean
-  mediaStreamRef?: React.RefObject<MediaStream|null>
+  onVideoStreamReady?: (stream: MediaStream) => void
   problemId?: string
 }
 
@@ -41,13 +41,14 @@ export default function CodeEditor({
   isMuted = false,
   isAISpeaking = false,
   isAIListening = false,
-  mediaStreamRef,
+  onVideoStreamReady,
   problemId,
 }: CodeEditorProps) {
   const [currentQuestion, setCurrentQuestion] = useState(question || "")
   const [loading, setLoading] = useState(!question)
   const [error, setError] = useState<string | null>(null)
 
+  // Fetch coding problem from backend
   useEffect(() => {
     if (question) {
       setCurrentQuestion(question)
@@ -59,34 +60,7 @@ export default function CodeEditor({
     }
   }, [question])
 
-  useEffect(() => {
-  const initializeVideo = () => {
-    if (!videoRef?.current || !mediaStreamRef?.current) return;
-
-    try {
-      // Always show video feed
-      if (videoRef.current && mediaStreamRef.current) {
-        videoRef.current.srcObject = mediaStreamRef.current;
-        // Ensure video tracks are enabled
-        mediaStreamRef.current.getVideoTracks().forEach(track => {
-          track.enabled = true;
-        });
-      }
-    } catch (err) {
-      console.error('Error accessing camera:', err);
-    }
-  }
-
-  initializeVideo();
-
-  return () => {
-    // Don't stop the tracks, just clear the ref
-    if (videoRef?.current?.srcObject) {
-      videoRef.current.srcObject = null;
-    }
-  }
-}, [videoRef, mediaStreamRef]);
-
+  // Enhanced copy/paste prevention
   useEffect(() => {
     const preventCopyPaste = (e: Event) => {
       e.preventDefault()
@@ -95,6 +69,7 @@ export default function CodeEditor({
     }
 
     const preventKeyboardShortcuts = (e: KeyboardEvent) => {
+      // Prevent Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+S, Ctrl+Z, Ctrl+Y
       if (e.ctrlKey || e.metaKey) {
         const forbiddenKeys = ['c', 'v', 'x', 'a', 's', 'z', 'y']
         if (forbiddenKeys.includes(e.key.toLowerCase())) {
@@ -104,6 +79,7 @@ export default function CodeEditor({
         }
       }
       
+      // Prevent F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U
       if (e.key === 'F12' || 
           (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J')) ||
           (e.ctrlKey && e.key === 'u')) {
@@ -126,6 +102,7 @@ export default function CodeEditor({
     }
 
     const preventSelection = (e: Event) => {
+      // Allow text selection only in the code editor textarea
       const target = e.target as HTMLElement
       if (target.tagName !== 'TEXTAREA' || !target.classList.contains('code-editor')) {
         e.preventDefault()
@@ -133,6 +110,7 @@ export default function CodeEditor({
       }
     }
 
+    // Add event listeners to document
     document.addEventListener('copy', preventCopyPaste, true)
     document.addEventListener('paste', preventCopyPaste, true)
     document.addEventListener('cut', preventCopyPaste, true)
@@ -141,10 +119,12 @@ export default function CodeEditor({
     document.addEventListener('dragstart', preventDrag, true)
     document.addEventListener('selectstart', preventSelection, true)
 
+    // Disable text selection via CSS
     document.body.style.userSelect = 'none'
     document.body.style.webkitUserSelect = 'none'
 
     return () => {
+      // Cleanup event listeners
       document.removeEventListener('copy', preventCopyPaste, true)
       document.removeEventListener('paste', preventCopyPaste, true)
       document.removeEventListener('cut', preventCopyPaste, true)
@@ -153,16 +133,30 @@ export default function CodeEditor({
       document.removeEventListener('dragstart', preventDrag, true)
       document.removeEventListener('selectstart', preventSelection, true)
       
+      // Restore text selection
       document.body.style.userSelect = 'auto'
       document.body.style.webkitUserSelect = 'auto'
     }
   }, [])
 
+  // Initialize video stream
+  useEffect(() => {
+    if (videoRef?.current && !isVideoOff) {
+      const stream = videoRef.current.srcObject;
+      if (stream) {
+        videoRef.current.srcObject = stream;
+      }
+    }
+  }, [isVideoOff, videoRef]);
+
+
+  // Handle textarea events with enhanced security
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     onChange(e.target.value)
   }
 
   const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Allow normal typing and navigation keys, but prevent copy/paste shortcuts
     if (e.ctrlKey || e.metaKey) {
       const forbiddenKeys = ['c', 'v', 'x', 'a', 's', 'z', 'y']
       if (forbiddenKeys.includes(e.key.toLowerCase())) {
@@ -272,15 +266,25 @@ export default function CodeEditor({
           {/* Video Feeds */}
           <div className="flex flex-col gap-3 flex-shrink-0">
             {/* User Video Feed */}
-            // In the video feed section of code-editor.tsx, replace with:
             <div className="relative w-full aspect-video bg-gray-800 rounded-lg overflow-hidden">
-              <video 
-                ref={videoRef} 
-                autoPlay 
-                muted 
-                playsInline 
-                className="w-full h-full object-cover"
-              />
+              {isVideoOff ? (
+                <div className="w-full h-full bg-gray-700 flex items-center justify-center">
+                  <div className="text-center">
+                    <div className="w-12 h-12 bg-gray-600 rounded-full flex items-center justify-center mx-auto mb-2">
+                      <span className="text-xl">👤</span>
+                    </div>
+                    <span className="text-sm text-gray-300">Camera Off</span>
+                  </div>
+                </div>
+              ) : (
+                <video 
+                  ref={videoRef} 
+                  autoPlay 
+                  muted 
+                  playsInline 
+                  className="w-full h-full object-cover"
+                />
+              )}
               <div className="absolute bottom-2 left-2 bg-black/60 rounded px-2 py-1">
                 <span className="text-white text-xs">You</span>
               </div>
