@@ -9,7 +9,7 @@ import secrets
 import smtplib
 from email.mime.text import MIMEText
 import threading
-import random
+
 from backend import ExpertTechnicalInterviewer
 from shared_state import interview_state, save_to_conversation_history
 
