@@ -2,7 +2,7 @@ import asyncio
 import websockets
 import json
 import threading
-from your_existing_code import ExpertTechnicalInterviewer
+from backend import ExpertTechnicalInterviewer
 
 class WebSocketInterviewServer:
     def __init__(self):

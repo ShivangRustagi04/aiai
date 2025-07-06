@@ -70,35 +70,18 @@ export default function SimpleTranscript({ transcript }: SimpleTranscriptProps) 
       minute: "2-digit",
     })
   }
-
   return (
-    <div className="bg-gray-800 flex flex-col" style={{height: '120px'}}>
-      <div ref={transcriptRef} className="flex-1 overflow-y-auto p-3" style={{scrollBehavior: 'smooth'}}>
-        {transcript.length === 0 ? (
-          <div className="text-gray-500 text-center py-4">
-            <p className="text-sm">Transcript will appear here...</p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {transcript.map((msg, index) => (
-              <div key={index}>
-                <div className="flex items-start space-x-2">
-                  <span className={`text-xs font-medium ${msg.speaker === "AI" ? "text-blue-400" : "text-green-400"}`}>
-                    {msg.speaker === "AI" ? "Gyani" : "You"}
-                  </span>
-                  <span className="text-xs text-gray-500">{formatTime(msg.timestamp)}</span>
-                </div>
-                <p className="text-white text-sm mt-1 ml-2 leading-relaxed">
-                  {msg.speaker === "AI" ? (
-                    <TypewriterText text={msg.message} isTyping={msg.isTyping || false} />
-                  ) : (
-                    msg.message
-                  )}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
+    <div className="flex flex-col bg-transparent">
+      <div className="p-2">
+        {(() => {
+          const aiMessages = transcript.filter(msg => msg.speaker === "AI")
+          const latestAI = aiMessages[aiMessages.length - 1]
+
+          return latestAI ? (
+            <TypewriterText text={latestAI.message} isTyping={latestAI.isTyping || false} />
+          ) : null
+        })()}
+
       </div>
     </div>
   )
