@@ -698,7 +698,7 @@ class ExpertTechnicalInterviewer:
                 - Be appropriate for their stated experience level
                 - Keep it to one clear question
                 - Focus on real-world application
-                - Do not repeat same question again
+                - Important: If a similar question was already asked, generate a completely different one. Never reword the same question.
                 - Question should be one-liner 
                 
                 Recent conversation: {' '.join(msg['content'] for msg in self.conversation_history[-3:])}
@@ -713,7 +713,8 @@ class ExpertTechnicalInterviewer:
                 - Be appropriate for their stated experience level
                 - Keep it to one clear question
                 - Focus on practical situations
-                - Do not repeat same question again
+                - Important: If a similar question was already asked, generate a completely different one. Never reword the same question.
+
                 - Question should be one-liner 
                 
                 Recent conversation: {' '.join(msg['content'] for msg in self.conversation_history[-3:])}
