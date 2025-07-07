@@ -193,7 +193,7 @@ class ExpertTechnicalInterviewer:
         return "Python"  # default
 
     def wait_after_speaking(self, message, base=0.6, per_word=0.15):
-        time.sleep(0.1)  # Always wait 1 second after speaking
+        time.sleep(0.1)
 
     def _give_small_hint(self, question_text):
         hint_prompt = f"""You are an AI coding interviewer. Give a small hint for the following problem.

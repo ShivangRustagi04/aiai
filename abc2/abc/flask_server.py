@@ -116,6 +116,53 @@ def save_to_conversation_history(role, content):
     })
 from datetime import datetime
 
+def complete_interview_reset():
+    """Complete cleanup when interview ends"""
+    global interviewer, interview_thread, interview_stop_event
+    
+    print("🧹 COMPLETE INTERVIEW CLEANUP STARTING...")
+    
+    # Reset interview state completely
+    interview_state.clear()
+    interview_state.update({
+        'active': False,
+        'stage': 'not_started',
+        'conversation_history': [],
+        'skill_questions_asked': 0,
+        'coding_questions_asked': 0,
+        'warnings': [],
+        'personal_info_collected': False,
+        'tech_background_collected': False,
+        'skills_collected': '',
+        'current_domain': None,
+        'current_question': None,
+        'interview_links': {},
+        'latest_code': '',
+        'language': ''
+    })
+    
+    # Reset AI state completely
+    ai_state.clear()
+    ai_state.update({
+        'is_speaking': False,
+        'is_listening': False,
+        'current_message': '',
+        'last_speech_start': None,
+        'last_speech_end': None
+    })
+    
+    # Stop and reset interviewer
+    if interviewer:
+        interviewer = None
+    
+    # Stop threads
+    interview_stop_event.set()
+    if interview_thread:
+        interview_thread = None
+    interview_stop_event.clear()
+    
+    print("✅ COMPLETE CLEANUP FINISHED - Ready for new interview")
+
 @app.route('/api/transcript', methods=['GET'])
 def get_transcript():
     history = interview_state.get("conversation_history", [])
@@ -309,6 +356,12 @@ def save_to_conversation_history(role, content):
         print(f"  - {msg['role']}: {msg['content']}")
 
 
+@app.route('/api/reset-interview', methods=['POST'])
+def reset_interview():
+    """Manual reset for new interview"""
+    complete_interview_reset()
+    return jsonify({'status': 'reset_complete', 'ready_for_new_interview': True})
+
 @app.route('/api/log-warning', methods=['POST'])
 def log_warning():
     data = request.json
@@ -339,6 +392,7 @@ def log_warning():
         interview_state['stage'] = 'terminated_due_to_violations'
         stop_interview_thread()  # Stop the thread
         interviewer = None
+        complete_interview_reset()
         print("✅ Interview fully terminated due to violations")
     
     return jsonify({
@@ -529,11 +583,18 @@ def submit_code():
     interview_state['language'] = language
 
     try:
-        # 🔧 Run code using backend method (safe execution)
+    
         output = interviewer._execute_code(language, user_code)
 
-        # 🤖 Generate follow-up question using Gemini
+   
         followup = interviewer._coding_followup(user_code, language)
+
+        if followup:
+            try:
+                from flask_server import speak_with_state_tracking  # import if not already
+                speak_with_state_tracking(interviewer, followup)
+            except Exception as e:
+                print(f"❌ Error while speaking follow-up: {e}")
 
         success = True
     except Exception as e:
@@ -546,6 +607,7 @@ def submit_code():
         "output": output,
         "followup_question": followup
     })
+
 
 
 @app.route("/api/generate-coding-question", methods=["POST"])
