@@ -150,6 +150,35 @@ export default function CodeEditor({
   }, [isVideoOff, videoRef]);
 
 
+  const initializeVideo = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true,
+      });
+      videoRef.current.srcObject = stream;
+    } catch (err) {
+      console.error('Error accessing camera:', err);
+      setError("Could not access camera/mic: " + err.message);
+    }
+  };
+
+  useEffect(() => {
+    if (videoRef?.current && videoRef.current.srcObject == null) {
+      navigator.mediaDevices
+        .getUserMedia({ video: true, audio: true })
+        .then((stream) => {
+          videoRef.current.srcObject = stream;
+        })
+        .catch((err) => {
+          console.error('Error accessing camera:', err);
+          setError("Could not access camera/mic: " + err.message);
+        });
+    }
+  }, [videoRef]);
+
+
+
   // Handle textarea events with enhanced security
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     onChange(e.target.value)

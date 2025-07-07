@@ -1,30 +1,48 @@
 "use client"
 
-import { Card } from "@/components/ui/card"
+import type React from "react"
+import { useState, useEffect, useRef } from "react"
 
 interface AIInterviewerAvatarProps {
-  isListening: boolean
   isSpeaking: boolean
-  currentMessage?: string
-  showVoiceActivity?: boolean
+  avatarSrc: string
 }
 
-export default function AIInterviewerAvatar({
-  isListening,
-  isSpeaking,
-  currentMessage,
-  showVoiceActivity = false, // turned off by default
-}: AIInterviewerAvatarProps) {
-  return (
-    <Card className="relative h-full w-full flex items-center justify-center bg-gray-800/30 backdrop-blur-md border-0 shadow-lg overflow-hidden">
+const AIInterviewerAvatar: React.FC<AIInterviewerAvatarProps> = ({ isSpeaking, avatarSrc }) => {
 
-      {/* Avatar */}
-      <div className="flex flex-col items-center space-y-3">
-        <div className="w-28 h-28 bg-blue-600 rounded-full flex items-center justify-center shadow-md">
-          <span className="text-white text-5xl font-bold">G</span>
-        </div>
-        <div className="text-lg font-medium text-white-700">Gyani</div>
+  return (
+    <div className="relative w-32 h-32 flex items-center justify-center">
+      {/* Main avatar circle */}
+      <div
+        className={`w-32 h-32 rounded-full flex items-center justify-center ${
+          isSpeaking
+            ? "bg-green-500"
+            : "bg-green-600"
+        }`}
+        style={{
+          ...(isSpeaking
+            ? {
+                animation: 'breathe 1.2s ease-in-out infinite'
+              }
+            : {})
+        }}
+      >
+        <span className="text-white text-4xl font-bold font-sans">G</span>
       </div>
-    </Card>
+
+      {/* Custom CSS for breathing animation */}
+      <style jsx>{`
+        @keyframes breathe {
+          0%, 100% {
+            transform: scale(1);
+          }
+          50% {
+            transform: scale(1.1);
+          }
+        }
+      `}</style>
+    </div>
   )
 }
+
+export default AIInterviewerAvatar

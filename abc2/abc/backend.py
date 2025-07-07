@@ -320,8 +320,11 @@ class ExpertTechnicalInterviewer:
         - Relate to actual work scenarios
         - Be specific enough to evaluate depth of knowledge
         - Be answerable in 2-3 minutes
-        - do not repeat the same question again
-        - questions should be new and not previously asked
+        - Must be completely new and not similar to any previously asked questions
+        - Should not be a reworded version of any earlier questions
+        
+        Previously asked questions:
+        {[q for q in self.conversation_history if q.get('role') == 'assistant']}
         
         Return only the question, no additional text."""
         
@@ -636,41 +639,35 @@ class ExpertTechnicalInterviewer:
             self.just_repeated = False
 
     def _generate_followup_question(self, original_question, answer):
-        """Generate a relevant follow-up question based on the answer"""
-        prompt = f"""Based on this interview exchange, generate one relevant follow-up question:
+            """Generate a relevant follow-up question based on the answer"""
+            prompt = f"""Based on this interview exchange, generate relevant follow-up question:
         
         Original Question: {original_question}
         Candidate Answer: {answer}
         
         Requirements:
         - Must be directly related to the answer
-        - Should probe deeper into specific details mentioned
-        - Should ask for clarification or expansion on one aspect
+        - Should probe deeper into the topic
         - Should be concise (1 sentence)
+        - Should be technically/professionally relevant
         - Should help evaluate the candidate's depth of knowledge
-        - Should not repeat any previous questions
-        
-        Example formats:
-        - "Can you elaborate on how you [specific aspect mentioned]?"
-        - "What challenges did you face when [specific part of answer]?"
-        - "How would you improve [specific part] if you did it again?"
         
         Return only the follow-up question."""
-        
-        followup = self.query_openai(prompt)
-        
-        if not followup:
-            # Fallback follow-up questions
-            domain = self.current_domain or "technology"
-            followups = {
-                "frontend": "How would you handle edge cases in this scenario?",
-                "backend": "What performance considerations would you make?",
-                "data": "How would this approach scale with larger datasets?",
-                "default": "Can you elaborate on your experience with this?"
-            }
-            return followups.get(domain, followups["default"])
-        
-        return followup.strip()
+            
+            followup = self.query_openai(prompt)
+            
+            if not followup:
+                # Fallback follow-up questions
+                domain = self.current_domain or "technology"
+                followups = {
+                    "frontend": "How would you handle edge cases in this scenario?",
+                    "backend": "What performance considerations would you make?",
+                    "data": "How would this approach scale with larger datasets?",
+                    "default": "Can you elaborate on your experience with this?"
+                }
+                return followups.get(domain, followups["default"])
+            
+            return followup.strip()
 
     def _conduct_question_phase(self, is_tech_interview):
         """Conduct the main question phase"""
@@ -692,32 +689,45 @@ class ExpertTechnicalInterviewer:
             if is_tech_interview:
                 system_prompt = f"""As a friendly technical interviewer, ask one engaging question about {self.current_domain or 'technology'} 
                 based on this conversation context. The question should:
-                - Be encouraging and conversational
+                - Be completely new and not similar to any previous questions
+                - Not be a reworded version of any earlier questions
+                - Be one clear question (1 sentence max)
                 - Build on what the candidate has already shared
                 - Test practical knowledge and experience
                 - Be appropriate for their stated experience level
-                - Keep it to one clear question
                 - Focus on real-world application
-                - Important: If a similar question was already asked, generate a completely different one. Never reword the same question.
-                - Question should be one-liner 
+                - ask a follow-up about their last answer
+                
+                Important:
+                - DO NOT repeat any questions already asked in this conversation
+                - DO NOT ask the same question in different wording
+                - ask a follow-up about their last answer
                 
                 Recent conversation: {' '.join(msg['content'] for msg in self.conversation_history[-3:])}
+                
+                Previously asked questions:
+                {[q for q in self.conversation_history if q.get('role') == 'assistant']}
                 
                 Generate only the question in a friendly, conversational tone."""
             else:
                 system_prompt = f"""As a friendly professional interviewer, ask one engaging question about {self.current_domain or 'professional work'} 
                 based on this conversation context. The question should:
-                - Be encouraging and conversational
+                - Be completely new and not similar to any previous questions
+                - Not be a reworded version of any earlier questions
+                - Be one clear question (1 sentence max)
                 - Focus on real-world professional scenarios
                 - Test domain knowledge and problem-solving
                 - Be appropriate for their stated experience level
-                - Keep it to one clear question
-                - Focus on practical situations
-                - Important: If a similar question was already asked, generate a completely different one. Never reword the same question.
-
-                - Question should be one-liner 
+                
+                Important:
+                - DO NOT repeat any questions already asked in this conversation
+                - DO NOT ask the same question in different wording
+                - If no new questions come to mind, ask a follow-up about their last answer
                 
                 Recent conversation: {' '.join(msg['content'] for msg in self.conversation_history[-3:])}
+                
+                Previously asked questions:
+                {[q for q in self.conversation_history if q.get('role') == 'assistant']}
                 
                 Generate only the question in a friendly, conversational tone."""
 
@@ -763,9 +773,25 @@ class ExpertTechnicalInterviewer:
                             placeholder = "[Unable to answer after multiple attempts]"
                             save_to_conversation_history("user", placeholder)
                             answer_received = True
-                if answer_received:
-                    self.question_count += 1
+                    
+                    elif answer and len(answer.split()) > 4:
+                        answer_received = True
+                        
+                        # Ask follow-up question based on answer
+                        followup = self._generate_followup_question(msg, answer)
+                        if followup and self._check_time_remaining("technical_questions") > 60:
+                            self.speak(followup)
+                            self.wait_after_speaking(followup)
+                            followup_answer = self.listen()
+                            if followup_answer and len(followup_answer.split()) > 4:
+                                save_to_conversation_history("assistant", followup)
+                        
+                        break
+
+                if answer_received and not self.just_repeated:
+                    self.question_count += 1  # Increment only for original questions
                     save_to_conversation_history("assistant", msg)
+                    
                     self.just_repeated = False
 
     def _conduct_coding_challenge(self):
@@ -774,8 +800,8 @@ class ExpertTechnicalInterviewer:
         time.sleep(0.1)
 
         while (self.coding_questions_asked < self.max_coding_questions and 
-               self.interview_active and 
-               self._check_time_remaining("coding_challenge") > 120):  # At least 2 minutes per question
+            self.interview_active and 
+            self._check_time_remaining("coding_challenge") > 120):
             
             self.current_coding_question = self._generate_coding_question(self.current_domain or "python")
             save_to_conversation_history("assistant", f"[Coding Challenge Question]\n{self.current_coding_question}")
@@ -789,7 +815,7 @@ class ExpertTechnicalInterviewer:
             start_time = time.time()
 
             while (self._check_time_remaining("coding_challenge") > 60 and 
-                   self.interview_active):
+                self.interview_active):
                 time.sleep(0.1)
                 
                 # Offer a hint after 2 minutes of inactivity
@@ -803,32 +829,49 @@ class ExpertTechnicalInterviewer:
 
             if not self.interview_active:
                 break
+
+            # After code submission, ask follow-up questions
+            self.speak("Now let's discuss your solution.", interruptible=False)
+            followup = self._coding_followup(self.latest_code_submission, self._identify_language_from_code(self.latest_code_submission))
+            if followup:
+                self.speak(followup)
+                answer = self.listen()
+                if answer:
+                    # Ask additional follow-up if time permits
+                    if self._check_time_remaining("coding_challenge") > 60:
+                        second_followup = self._generate_followup_question(followup, answer)
+                        if second_followup:
+                            self.speak(second_followup)
+                            second_answer = self.listen()
             time.sleep(0.1)
 
     def _coding_followup(self, code, language):
         """Ask follow-up questions about the code submitted by the candidate."""
-        prompt = f"""You are an expert software engineer reviewing code written in {language}.
-        The candidate has provided the following code:
+        prompt = f"""You are an expert software engineer reviewing this {language} code:
         
-        ```\n{code}\n```
+        ```{code}```
         
-        Ask one follow-up question that:
-        - Tests their understanding of the code they wrote
-        - Explores potential edge cases or improvements
-        - Is specific to the code provided
-        - Is clear and concise
-        - Can be answered without running the code
-        - Focuses on code clarity, efficiency, or potential bugs
-        - Is appropriate for an interview setting
+        Generate one specific technical follow-up question that:
+        1. Tests understanding of the code's logic
+        2. Asks about potential improvements
+        3. Explores edge cases not handled
+        4. Questions algorithmic choices
+        5. Is concise (1 sentence)
         
-        Generate only the question, no additional text."""
+        Example formats:
+        - "How would you optimize the time complexity of this solution?"
+        - "What edge cases does this code not handle?"
+        - "Why did you choose [specific approach] over alternatives?"
+        - "How would you modify this to handle [specific scenario]?"
+        
+        Return only the question."""
         
         try:
             response = self.query_openai(prompt)
-            return response.strip() if response else None
+            return response.strip() if response else "Can you walk me through your thought process for this solution?"
         except Exception as e:
             print(f"Error generating coding follow-up: {e}")
-            return "Can you walk me through your code and explain your approach?"
+            return "Can you explain the time complexity of your solution?"
 
     def _conduct_doubt_clearing(self, is_tech_interview):
         """Conduct doubt clearing session with time constraints"""
@@ -1179,7 +1222,7 @@ class ExpertTechnicalInterviewer:
             response = self.openai_client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are an expert technical interviewer.Ask engaging questions. Do not repeat questions already asked . Do not ask same question in differnt way unless candidate asks to repeat the question."},
+                    {"role": "system", "content": "You are an expert technical interviewer.Ask engaging questions. Do not repeat questions already asked . Do not ask same question in differnt way unless candidate asks to repeat the question.Should not be a reworded version of any earlier questions.next question should be related to the candidate's last answer. continue for whole technical discussion phase"},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,

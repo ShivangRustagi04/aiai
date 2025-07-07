@@ -15,7 +15,13 @@ interview_state = {
     'current_domain': None,
     'interview_links': {}
 }
-
+ai_state = {
+    'is_speaking': False,
+    'is_listening': True,
+    'current_message': '',
+    'last_speech_start': None,
+    'last_speech_end': None
+}
 def save_to_conversation_history(role, content):
     entry = {
         "role": role,
