@@ -1095,35 +1095,20 @@ class ExpertTechnicalInterviewer:
             print("[TTS Failed] Audio could not be played")
 
     def listen(self, max_attempts=3):
-        """Listen for user response using microphone with AssemblyAI"""
-        # Set your AssemblyAI API key
-        aai.settings.api_key = os.getenv("ASSEMBLYAI_API_KEY")
-        
+        """Listen for user response using microphone with faster STT options"""
         for attempt in range(max_attempts):
             try:
                 print("\nListening... (Speak now)")
                 
-                # Record audio using speech_recognition
                 with sr.Microphone() as source:
                     self.recognizer.adjust_for_ambient_noise(source)
                     audio = self.recognizer.listen(source, timeout=10, phrase_time_limit=30)
                 
-                # Save audio to temporary file
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                    tmp_path = tmp.name
-                    with open(tmp_path, "wb") as f:
-                        f.write(audio.get_wav_data())
+                print("Processing your speech...")
                 
-                # Create a transcriber object
-                transcriber = aai.Transcriber()
-                
-                # Transcribe with AssemblyAI
-                print("Processing your speech with AssemblyAI...")
-                transcript = transcriber.transcribe(tmp_path)
-                os.unlink(tmp_path)  # Clean up temp file
-                
-                if transcript.text and transcript.text.strip():
-                    text = transcript.text.strip()
+                # Try Google Web Speech API first (fastest but requires internet)
+                try:
+                    text = self.recognizer.recognize_google(audio)
                     print(f"Candidate: {text}")
                     
                     # Process tone detection
@@ -1136,7 +1121,10 @@ class ExpertTechnicalInterviewer:
                     
                     save_to_conversation_history("user", text)
                     return text
-                
+                    
+                except sr.UnknownValueError:
+                    print("Google Web Speech could not understand audio")
+                    raise             
             except Exception as e:
                 print(f"Speech recognition error: {e}")
                 if attempt < max_attempts - 1:

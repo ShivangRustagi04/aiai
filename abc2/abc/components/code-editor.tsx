@@ -28,7 +28,7 @@ interface CodeEditorProps {
 
 export default function CodeEditor({
   code,
-  language,
+  language: propLanguage,
   onChange,
   onLanguageChange,
   onRun,
@@ -47,6 +47,19 @@ export default function CodeEditor({
   const [currentQuestion, setCurrentQuestion] = useState(question || "")
   const [loading, setLoading] = useState(!question)
   const [error, setError] = useState<string | null>(null)
+  const [localLanguage, setLocalLanguage] = useState(propLanguage)
+
+  // Sync local language state with prop changes
+  useEffect(() => {
+    setLocalLanguage(propLanguage)
+  }, [propLanguage])
+
+  // Handle language selection
+  const handleLanguageChange = (newLanguage: string) => {
+    setLocalLanguage(newLanguage)
+    onLanguageChange(newLanguage)
+    console.log("Language changed to:", newLanguage) // For debugging
+  }
 
   // Fetch coding problem from backend
   useEffect(() => {
@@ -69,7 +82,6 @@ export default function CodeEditor({
     }
 
     const preventKeyboardShortcuts = (e: KeyboardEvent) => {
-      // Prevent Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+S, Ctrl+Z, Ctrl+Y
       if (e.ctrlKey || e.metaKey) {
         const forbiddenKeys = ['c', 'v', 'x', 'a', 's', 'z', 'y']
         if (forbiddenKeys.includes(e.key.toLowerCase())) {
@@ -79,7 +91,6 @@ export default function CodeEditor({
         }
       }
       
-      // Prevent F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U
       if (e.key === 'F12' || 
           (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J')) ||
           (e.ctrlKey && e.key === 'u')) {
@@ -102,7 +113,6 @@ export default function CodeEditor({
     }
 
     const preventSelection = (e: Event) => {
-      // Allow text selection only in the code editor textarea
       const target = e.target as HTMLElement
       if (target.tagName !== 'TEXTAREA' || !target.classList.contains('code-editor')) {
         e.preventDefault()
@@ -110,7 +120,6 @@ export default function CodeEditor({
       }
     }
 
-    // Add event listeners to document
     document.addEventListener('copy', preventCopyPaste, true)
     document.addEventListener('paste', preventCopyPaste, true)
     document.addEventListener('cut', preventCopyPaste, true)
@@ -119,12 +128,10 @@ export default function CodeEditor({
     document.addEventListener('dragstart', preventDrag, true)
     document.addEventListener('selectstart', preventSelection, true)
 
-    // Disable text selection via CSS
     document.body.style.userSelect = 'none'
     document.body.style.webkitUserSelect = 'none'
 
     return () => {
-      // Cleanup event listeners
       document.removeEventListener('copy', preventCopyPaste, true)
       document.removeEventListener('paste', preventCopyPaste, true)
       document.removeEventListener('cut', preventCopyPaste, true)
@@ -133,7 +140,6 @@ export default function CodeEditor({
       document.removeEventListener('dragstart', preventDrag, true)
       document.removeEventListener('selectstart', preventSelection, true)
       
-      // Restore text selection
       document.body.style.userSelect = 'auto'
       document.body.style.webkitUserSelect = 'auto'
     }
@@ -147,8 +153,7 @@ export default function CodeEditor({
         videoRef.current.srcObject = stream;
       }
     }
-  }, [isVideoOff, videoRef]);
-
+  }, [isVideoOff, videoRef])
 
   const initializeVideo = async () => {
     try {
@@ -156,36 +161,29 @@ export default function CodeEditor({
         video: true,
         audio: true,
       });
-      videoRef.current.srcObject = stream;
+      if (videoRef?.current) {
+        videoRef.current.srcObject = stream;
+      }
+      if (onVideoStreamReady) {
+        onVideoStreamReady(stream);
+      }
     } catch (err) {
       console.error('Error accessing camera:', err);
-      setError("Could not access camera/mic: " + err.message);
+      setError("Could not access camera/mic: " + (err as Error).message);
     }
   };
 
   useEffect(() => {
     if (videoRef?.current && videoRef.current.srcObject == null) {
-      navigator.mediaDevices
-        .getUserMedia({ video: true, audio: true })
-        .then((stream) => {
-          videoRef.current.srcObject = stream;
-        })
-        .catch((err) => {
-          console.error('Error accessing camera:', err);
-          setError("Could not access camera/mic: " + err.message);
-        });
+      initializeVideo();
     }
-  }, [videoRef]);
+  }, [videoRef])
 
-
-
-  // Handle textarea events with enhanced security
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     onChange(e.target.value)
   }
 
   const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Allow normal typing and navigation keys, but prevent copy/paste shortcuts
     if (e.ctrlKey || e.metaKey) {
       const forbiddenKeys = ['c', 'v', 'x', 'a', 's', 'z', 'y']
       if (forbiddenKeys.includes(e.key.toLowerCase())) {
@@ -243,7 +241,11 @@ export default function CodeEditor({
 
           {/* Editor Controls */}
           <div className="flex items-center justify-between flex-shrink-0">
-            <Select value={language} onValueChange={onLanguageChange}>
+            <Select 
+              value={localLanguage} 
+              onValueChange={handleLanguageChange}
+              disabled={isSubmitted}
+            >
               <SelectTrigger className="w-32 h-8 bg-gray-800 border-gray-700 text-white text-sm">
                 <SelectValue placeholder="Language" />
               </SelectTrigger>
@@ -252,15 +254,27 @@ export default function CodeEditor({
                 <SelectItem value="Python">Python</SelectItem>
                 <SelectItem value="Java">Java</SelectItem>
                 <SelectItem value="C++">C++</SelectItem>
+                <SelectItem value="TypeScript">TypeScript</SelectItem>
+                <SelectItem value="Go">Go</SelectItem>
               </SelectContent>
             </Select>
 
             <div className="flex space-x-2">
-              <Button onClick={onRun} variant="outline" size="sm" className="bg-green-700 border-green-600 text-white hover:bg-green-600">
+              <Button 
+                onClick={onRun} 
+                variant="outline" 
+                size="sm" 
+                className="bg-green-700 border-green-600 text-white hover:bg-green-600"
+                disabled={isSubmitted}
+              >
                 <Play className="w-4 h-4 mr-1" />
                 Run
               </Button>
-              <Button onClick={onSubmit} disabled={isSubmitted} className="bg-blue-600 hover:bg-blue-700 text-white">
+              <Button 
+                onClick={onSubmit} 
+                disabled={isSubmitted} 
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
                 <Send className="w-4 h-4 mr-1" />
                 {isSubmitted ? "Submitted" : "Submit"}
               </Button>
@@ -286,6 +300,7 @@ export default function CodeEditor({
               placeholder="Write your code here..."
               spellCheck={false}
               style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+              disabled={isSubmitted}
             />
           </div>
         </div>
@@ -309,7 +324,7 @@ export default function CodeEditor({
                 <video 
                   ref={videoRef} 
                   autoPlay 
-                  muted 
+                  muted={isMuted}
                   playsInline 
                   className="w-full h-full object-cover"
                 />
@@ -324,7 +339,7 @@ export default function CodeEditor({
               )}
             </div>
 
-            {/* AI Video Feed - Simple Google Meet Style */}
+            {/* AI Video Feed */}
             <div className="relative w-full aspect-video bg-gray-800 rounded-lg overflow-hidden">
               <div className="w-full h-full bg-gray-700 flex items-center justify-center">
                 <div className="text-center">
