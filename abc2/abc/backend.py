@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import random
@@ -13,7 +14,8 @@ import tempfile
 from datetime import datetime, timedelta
 from elevenlabs.client import ElevenLabs
 import speech_recognition as sr
-import assemblyai as aai
+from scipy.spatial.distance import euclidean
+import numpy as np
 
 from shared_state import save_to_conversation_history
 
@@ -21,9 +23,11 @@ from shared_state import save_to_conversation_history
 load_dotenv()
 
 class ExpertTechnicalInterviewer:
-    def __init__(self, model="gpt-4o-mini-2024-07-18", accent="indian", 
-                 client_questions=None, total_duration=80):
-        try:
+    def __init__(self, config_file="interview_config.json", model="gpt-4o-mini-2024-07-18", accent="indian"):
+            # Load interview configuration from JSON file
+            with open(config_file) as f:
+                self.config = json.load(f)
+            
             # Initialize OpenAI client
             self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             if not os.getenv("OPENAI_API_KEY"):
@@ -35,7 +39,29 @@ class ExpertTechnicalInterviewer:
             self.latest_code_submission = None
             self.last_question = None
             self.just_repeated = False
+            self.gaze_away_threshold = 5  # seconds before warning
+            self.last_gaze_detection_time = time.time()
+            
+            
+            self.eye_detection_attempts = 0
+            self.max_eye_detection_attempts = 5 
             self.current_domain = None
+            self.gaze_away_threshold = 5  # seconds before warning
+            self.last_gaze_detection_time = time.time()
+            
+            
+            self.face_detection_interval = 5  # seconds between checks
+            self.max_face_absence_time = 5  # seconds before warning
+            self.last_face_detection_time = time.time()
+            
+            
+            
+            # Start face monitoring thread
+            self.face_monitor_thread = threading.Thread(target=self._monitor_face_presence)
+            self.face_monitor_thread.daemon = True
+            self.face_monitor_thread.start()
+            self.eye_landmark_detector = None
+            
             self.conversation_history = []
             self.is_listening = False
             self.interrupted = False
@@ -46,7 +72,7 @@ class ExpertTechnicalInterviewer:
             self.last_face_detection_time = time.time()
             self.tab_change_detected = False
             self.response_delay = 0.3
-            self.accent = accent.lower()
+            self.accent = str(accent).lower() if accent else "default"
             self.interview_active = True
             self.coding_questions_asked = 0
             self.max_coding_questions = 2
@@ -62,13 +88,23 @@ class ExpertTechnicalInterviewer:
             self.recognizer.pause_threshold = 0.8
             self.recognizer.energy_threshold = 4000
             
-            # Time management
-            self.total_duration = min(max(total_duration, 70), 90)  # Keep between 70-90 minutes
-            self.interview_start_time = None
-            self.section_start_time = None
-            self.current_section = None
-            self.client_questions = client_questions or []
+            # Time management from config
+            self.total_duration = max(min(self.config.get("duration_minutes", 80), 90), 70)  # Keep between 70-90 minutes
+            self.section_durations = self.config.get("section_durations", {
+                "introduction": 5,
+                "background": 7,
+                "technical_questions": 30,
+                "coding_challenge": 20,
+                "doubt_clearing": 10,
+                "closing": 3
+            })
+            
+            # Client questions from config
+            self.client_questions = self._prepare_client_questions()
             self.used_client_questions = []
+            
+            # Interviewer role from config
+            self.interviewer_role = self.config.get("interviewer_role", "technical interviewer")
             
             # Initialize face detection
             self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -107,10 +143,154 @@ class ExpertTechnicalInterviewer:
             self.tab_monitor_thread = threading.Thread(target=self._monitor_tab_changes)
             self.tab_monitor_thread.daemon = True
             self.tab_monitor_thread.start()
+            
 
-        except Exception as e:
-            print(f"Initialization error: {e}")
-            raise
+    def _prepare_client_questions(self):
+        """Prepare client questions from config"""
+        questions = []
+        # Add easy questions
+        if "easy_questions" in self.config:
+            questions.extend(self.config["easy_questions"])
+        
+        # Add medium questions
+        if "medium_questions" in self.config:
+            questions.extend(self.config["medium_questions"])
+        
+        # Add hard questions
+        if "hard_questions" in self.config:
+            questions.extend(self.config["hard_questions"])
+            
+        return questions
+    def _check_gaze_direction(self, frame):
+        """Simplified gaze detection using only OpenCV"""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # First detect face
+        faces = self.face_cascade.detectMultiScale(gray, 1.1, 4)
+        if len(faces) == 0:
+            return False
+            
+        # Use first face found
+        (x, y, w, h) = faces[0]
+        
+        # Get region of interest for eyes (upper half of face)
+        roi_gray = gray[y:y+h//2, x:x+w]
+        roi_color = frame[y:y+h//2, x:x+w]
+        
+        # Detect eyes
+        eyes = self.eye_cascade.detectMultiScale(roi_gray, 1.1, 4)
+        
+        if len(eyes) < 2:  # Need at least 2 eyes detected
+            self.eye_detection_attempts += 1
+            if self.eye_detection_attempts >= self.max_eye_detection_attempts:
+                # Fallback - if we can't detect eyes but face is present, assume looking at screen
+                return False
+            return None  # Undetermined
+        
+        self.eye_detection_attempts = 0  # Reset counter
+        
+        # Simple gaze estimation based on eye positions
+        eyes = sorted(eyes, key=lambda e: e[0])  # Sort by x position
+        
+        # Calculate center points of eyes
+        eye_centers = []
+        for (ex, ey, ew, eh) in eyes[:2]:  # Take first two eyes
+            eye_centers.append((x + ex + ew//2, y + ey + eh//2))
+        
+        if len(eye_centers) < 2:
+            return None
+        
+        # Calculate angle between eyes (simple horizontal alignment check)
+        dx = eye_centers[1][0] - eye_centers[0][0]
+        dy = eye_centers[1][1] - eye_centers[0][1]
+        angle = np.degrees(np.arctan2(dy, dx))
+        
+        # If eyes are not horizontally aligned (looking left/right)
+        if abs(angle) > 15:  # More than 15 degrees tilt
+            return True
+        
+        # Check if eyes are centered in face (simple approach)
+        face_center_x = x + w//2
+        avg_eye_x = (eye_centers[0][0] + eye_centers[1][0]) / 2
+        
+        # If eyes are significantly off-center
+        if abs(avg_eye_x - face_center_x) > w * 0.2:  # 20% of face width
+            return True
+        
+        return False
+
+    def _check_face_presence(self):
+        """Check if a face is currently visible in camera"""
+        if not self.cap or not self.cap.isOpened():
+            return False
+            
+        ret, frame = self.cap.read()
+        if not ret:
+            return False
+            
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = self.face_cascade.detectMultiScale(gray, 1.1, 4)
+        
+        # Also check for eyes to reduce false positives
+        if len(faces) > 0:
+            for (x, y, w, h) in faces:
+                roi_gray = gray[y:y+h, x:x+w]
+                eyes = self.eye_cascade.detectMultiScale(roi_gray)
+                if len(eyes) > 0:
+                    return True
+                    
+        return False
+
+    def _handle_face_absence(self):
+        self._handle_cheating_attempt("face_absence")
+
+    def _monitor_face_presence(self):
+        """Monitor for face and gaze with simpler approach"""
+        while self.monitoring_active and self.interview_active:
+            try:
+                if not self.camera_active:
+                    time.sleep(self.face_detection_interval)
+                    continue
+                    
+                # Check every interval
+                if time.time() - self.last_face_detection_time > self.face_detection_interval:
+                    ret, frame = self.cap.read()
+                    if not ret:
+                        time.sleep(1)
+                        continue
+                        
+                    # Check basic face presence
+                    face_found = self._check_face_presence(frame)
+                    
+                    if face_found:
+                        self.last_face_detection_time = time.time()
+                        
+                        # Check gaze direction
+                        gaze_away = self._check_gaze_direction(frame)
+                        
+                        if gaze_away is True:  # Definitely looking away
+                            if not hasattr(self, 'gaze_away_start_time'):
+                                self.gaze_away_start_time = time.time()
+                            else:
+                                gaze_away_duration = time.time() - self.gaze_away_start_time
+                                if gaze_away_duration > self.gaze_away_threshold:
+                                    self._handle_gaze_absence()
+                        else:
+                            if hasattr(self, 'gaze_away_start_time'):
+                                del self.gaze_away_start_time
+                    else:
+                        absence_duration = time.time() - self.last_face_detection_time
+                        if absence_duration > self.max_face_absence_time:
+                            self._handle_face_absence()
+                            
+                time.sleep(0.5)
+                
+            except Exception as e:
+                print(f"Monitoring error: {e}")
+                time.sleep(5)
+
+    def _handle_gaze_absence(self):
+        self._handle_cheating_attempt("gaze_absence")
 
     def _check_time_remaining(self, section=None):
         """Check remaining time for current section or total interview"""
@@ -122,23 +302,15 @@ class ExpertTechnicalInterviewer:
         
         if section and self.section_start_time:
             section_elapsed = time.time() - self.section_start_time
-            section_duration = self._get_section_duration(section)
+            section_duration = self._get_section_duration(section) * 60  # Convert minutes to seconds
             section_remaining = section_duration - section_elapsed
             return min(total_remaining, section_remaining)
             
         return total_remaining
 
     def _get_section_duration(self, section):
-        """Return allocated time for each section in seconds"""
-        section_durations = {
-            "introduction": 5 * 60,       # 5 minutes
-            "background": 7 * 60,         # 7 minutes
-            "technical_questions": 30 * 60, # 30 minutes
-            "coding_challenge": 20 * 60,    # 20 minutes
-            "doubt_clearing": 10 * 60,      # 10 minutes
-            "closing": 3 * 60               # 3 minutes
-        }
-        return section_durations.get(section, 0)
+        """Return allocated time for each section in minutes"""
+        return self.section_durations.get(section, 0)
 
     def _start_section(self, section_name):
         """Mark the start of a new interview section"""
@@ -416,18 +588,18 @@ class ExpertTechnicalInterviewer:
         try:
             self.interview_start_time = time.time()
             
-            # Introduction Section (5 minutes)
+            # Introduction Section
             self._start_section("introduction")
             self._conduct_introduction()
             
-            # Background Section (7 minutes)
+            # Background Section
             self._start_section("background")
             self._gather_background()
             
             # Determine interview type
             is_tech_interview = self.current_domain in self.tech_domains
             
-            # Technical/Professional Questions Section (30 minutes)
+            # Technical/Professional Questions Section
             self._start_section("technical_questions")
             self._ask_client_questions()  # Ask client-provided questions first
             
@@ -435,17 +607,17 @@ class ExpertTechnicalInterviewer:
             if not self._should_transition_to_next_section("technical_questions"):
                 self._conduct_question_phase(is_tech_interview)
             
-            # Coding Challenge Section (20 minutes, tech interviews only)
+            # Coding Challenge Section (tech interviews only)
             if is_tech_interview and self.interview_active:
                 self._start_section("coding_challenge")
                 self._conduct_coding_challenge()
             
-            # Doubt Clearing Section (10 minutes)
+            # Doubt Clearing Section
             if self.interview_active:
                 self._start_section("doubt_clearing")
                 self._conduct_doubt_clearing(is_tech_interview)
             
-            # Closing Section (3 minutes)
+            # Closing Section
             if self.interview_active:
                 self._start_section("closing")
                 self._conduct_closing(is_tech_interview)
@@ -461,20 +633,19 @@ class ExpertTechnicalInterviewer:
             self._stop_camera()
 
     def _conduct_introduction(self):
-        """Handle the introduction section (5 minutes)"""
-        self.speak("Hello! I am Gyani. Welcome to your interview session today. I'm excited to chat with you!", interruptible=False)
-        msg = "Before we begin, how has your day been so far?"
-        self.speak(msg, interruptible=False)
-        self.wait_after_speaking(msg)
+        """Handle the introduction section"""
+        intro_message = self.config.get("introduction_message","Hello! I am Gyani. Welcome to your interview session today. I'm excited to chat with you!. Before we begin how has your day been so far?")
+        self.speak(intro_message, interruptible=False)
         day_response = self.listen()
 
         if day_response:
             save_to_conversation_history("user", day_response)
             self.speak("That's great to hear! I appreciate you taking the time for this session.", interruptible=False)
 
-        msg = "Now, could you please tell me your name and a bit about yourself?"
-        self.speak(msg, interruptible=False)
-        self.wait_after_speaking(msg)
+        name_question = self.config.get("name_question", 
+                                      "Now, could you please tell me your name and a bit about yourself?")
+        self.speak(name_question, interruptible=False)
+        self.wait_after_speaking(name_question)
         introduction = self.listen()
 
         if introduction:
@@ -502,7 +673,7 @@ class ExpertTechnicalInterviewer:
         return 0  # Default if no experience found
 
     def _gather_background(self):
-        """Gather candidate background information (7 minutes)"""
+        """Gather candidate background information"""
         is_tech_interview = self.current_domain in self.tech_domains
 
         # First ask about years of experience
@@ -529,7 +700,7 @@ class ExpertTechnicalInterviewer:
     def _should_transition_to_next_section(self, current_section):
         """Determine if we should transition to next section based on time"""
         time_remaining = self._check_time_remaining(current_section)
-        min_time_for_next = self._get_section_duration(self._get_next_section(current_section))
+        min_time_for_next = self._get_section_duration(self._get_next_section(current_section)) * 60
         
         # If less than 25% of total time remains or not enough time for next section
         if (time_remaining < (self.total_duration * 60 * 0.25) or 
@@ -950,7 +1121,8 @@ class ExpertTechnicalInterviewer:
 
     def _conduct_closing(self, is_tech_interview):
         """Conduct closing remarks"""
-        self.speak("Thank you so much for your time today. It was a pleasure talking with you, and I wish you the best of luck!", interruptible=False)
+        closing_message = self.config.get("closing_message", "Thank you so much for your time today. It was a pleasure talking with you, and I wish you the best of luck!")
+        self.speak(closing_message, interruptible=False)
 
     def _start_camera(self):
         """Start the camera for face detection"""
@@ -960,8 +1132,9 @@ class ExpertTechnicalInterviewer:
 
     def _stop_camera(self):
         """Stop the camera"""
-        if self.camera_active and self.cap:
+        if self.camera_active and self.cap is not None:
             self.cap.release()
+            self.cap = None
             self.camera_active = False
 
     def _restart_camera(self):
@@ -1015,30 +1188,34 @@ class ExpertTechnicalInterviewer:
                 time.sleep(3)
 
     def _handle_cheating_attempt(self, cheat_type):
-        """Handle different types of cheating attempts"""
+        """Handle all types of cheating attempts with a unified counter"""
         self.cheating_warnings += 1
         
-        if self.cheating_warnings >= 3:
+        if self.cheating_warnings >= self.max_cheating_warnings:
             self.speak("Multiple concerning behaviors detected. The interview will now conclude.", interruptible=False)
             self.interview_active = False
             return
             
         responses = {
-            "tab_change": "Please stay focused on the interview window and avoid switching to other applications."
+            "tab_change": "Please stay focused on the interview window and avoid switching to other applications.",
+            "face_absence": "Please ensure your face is clearly visible in the camera.",
+            "gaze_absence": "Please maintain focus on the screen and avoid looking away."
         }
         
         if cheat_type in responses:
-            self.speak(f"Gentle reminder: {responses[cheat_type]} This is notice {self.cheating_warnings} of 3.", interruptible=False)
+            self.speak(f"Gentle reminder: {responses[cheat_type]} This is notice {self.cheating_warnings} of {self.max_cheating_warnings}.", interruptible=False)
 
     def __del__(self):
         """Clean up resources"""
         self.interview_active = False
         self.monitoring_active = False
-        self._stop_camera()
+        if hasattr(self, 'camera_active') and hasattr(self, '_stop_camera'):
+            self._stop_camera()
         if hasattr(self, 'face_monitor_thread'):
             self.face_monitor_thread.join(timeout=1)
         if hasattr(self, 'tab_monitor_thread'):
             self.tab_monitor_thread.join(timeout=1)
+
 
     def speak(self, text, interruptible=True):
         if self.interrupted:
@@ -1084,11 +1261,7 @@ class ExpertTechnicalInterviewer:
             
             # Clean up
             os.unlink(tmp_file_path)
-            
-            # Calculate wait time
-            word_count = len(text.split())
-            wait_time = max(0.5, word_count * 0.2)
-            time.sleep(wait_time)
+            time.sleep(0.1)
 
         except Exception as e:
             print(f"Audio playback error: {e}")
@@ -1272,18 +1445,38 @@ class ExpertTechnicalInterviewer:
         print("[Domain Detection] No domain match found.")
         return None
 
-    def _save_transcription_to_docx(self, file_path="interview_transcript.docx"):
-        doc = Document()
-        doc.add_heading("Interview Transcription", level=1)
+    def _save_transcription_to_docx(self, file_path=None):
+        """Save conversation history to DOCX with proper formatting"""
+        if not file_path:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_path = f"interview_transcript_{timestamp}.docx"
         
-        for i, msg in enumerate(self.conversation_history):
-            role = msg.get("role", "unknown").capitalize()
-            content = msg.get("content", "")
-            doc.add_paragraph(f"{role}: {content}")
-        
-        doc.save(file_path)
-        print(f"Transcript saved to {file_path}")
-        return file_path
+        try:
+            doc = Document()
+            doc.add_heading("Interview Transcript", level=1)
+            
+            # Add metadata
+            doc.add_paragraph(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            doc.add_paragraph(f"Domain: {self.current_domain or 'Not specified'}")
+            doc.add_paragraph("\n")
+            
+            # Add conversation
+            for msg in self.conversation_history:
+                role = "Interviewer" if msg.get("role") == "assistant" else "Candidate"
+                content = msg.get("content", "").strip()
+                
+                if content:
+                    para = doc.add_paragraph()
+                    para.add_run(f"{role}: ").bold = True
+                    para.add_run(content)
+            
+            doc.save(file_path)
+            print(f"[SUCCESS] Transcript saved to {file_path}")
+            return file_path
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to save transcript: {e}")
+            return None
 
     def _generate_feedback_from_docx(self, docx_path="interview_transcript.docx"):
         try:
@@ -1354,11 +1547,9 @@ class ExpertTechnicalInterviewer:
 
 if __name__ == "__main__":
     try:
-        # Example usage with client-provided questions
-        client_questions = []
-        
         interviewer = ExpertTechnicalInterviewer(
-            total_duration=80  # 80 minute interview
+            config_file="interview_config.json",
+            total_duration=80  # Can be overridden by config
         )
         interviewer.start_interview()
     except Exception as e:

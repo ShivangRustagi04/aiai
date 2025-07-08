@@ -1,14 +1,14 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify,send_file
 from flask_cors import CORS
-import tempfile
-import os
 from flask_cors import  CORS
 import datetime
-from datetime import datetime , timedelta
+from datetime import datetime, timedelta, timezone
 import secrets
 import smtplib
 from email.mime.text import MIMEText
+import json
 import threading
+import random
 
 from backend import ExpertTechnicalInterviewer
 from shared_state import interview_state, save_to_conversation_history , ai_state
@@ -22,7 +22,7 @@ CORS(app)
 # Add these global variables after your imports
 interviewer = None
 interview_thread = None
-interview_stop_event = threading.Event()
+interviewer = None
 
 
 def initialize_interviewer():
@@ -112,7 +112,7 @@ def save_to_conversation_history(role, content):
     interview_state["conversation_history"].append({
         "role": role,
         "content": content,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     })
 from datetime import datetime
 
@@ -300,7 +300,7 @@ def speak_with_state_tracking(interviewer, text):
     ai_state['is_listening'] = False
     ai_state['current_message'] = text
     ai_state['last_speech_start'] = datetime.utcnow().isoformat()
-
+    ai_state['last_speech_start'] = datetime.now(timezone.utc).isoformat()
     print("🎙️ AI STARTED SPEAKING:", ai_state)
 
     try:
@@ -326,7 +326,7 @@ def mark_ai_finished_speaking():
     ai_state['is_speaking'] = False
     ai_state['is_listening'] = True
     ai_state['last_speech_end'] = datetime.utcnow().isoformat()
-
+    ai_state['last_speech_end'] = datetime.now(timezone.utc).isoformat()
     print("🔕 AI FINISHED SPEAKING:", ai_state)
 
 def stop_interview_thread():
@@ -538,13 +538,73 @@ def end_interview():
     interview_state['active'] = False
     interview_state['stage'] = 'concluded'
     
+    # Generate outputs before stopping
+    try:
+        docx_path = interviewer._save_transcription_to_docx()
+        feedback_path = interviewer._generate_feedback_from_docx(docx_path)
+    except Exception as e:
+        print(f"⚠️ Failed to generate outputs: {e}")
+    
     # Stop the interview thread
     stop_interview_thread()
     
     return jsonify({
         'status': 'ended',
-        'message': 'Interview has been ended manually.'
+        'message': 'Interview has been ended manually.',
+        'transcript_path': docx_path,
+        'feedback_path': feedback_path
     })
+
+@app.route('/api/export-transcript', methods=['POST'])
+def export_transcript():
+    """Export conversation history to DOCX"""
+    try:
+        # Use the method from backend.py
+        docx_path = interviewer._save_transcription_to_docx()
+        if not docx_path:
+            raise Exception("Failed to generate DOCX")
+            
+        return jsonify({
+            'status': 'success',
+            'path': docx_path,
+            'download_url': f'/api/download-transcript?path={docx_path}'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/generate-feedback', methods=['POST'])
+def generate_feedback():
+    """Generate feedback from transcript"""
+    try:
+        # First ensure we have a transcript
+        if not interviewer.conversation_history:
+            raise Exception("No conversation history available")
+            
+        # Generate DOCX if needed
+        docx_path = interviewer._save_transcription_to_docx()
+        
+        # Generate feedback
+        feedback_path = interviewer._generate_feedback_from_docx(docx_path)
+        
+        return jsonify({
+            'status': 'success',
+            'feedback_path': feedback_path,
+            'download_url': f'/api/download-feedback?path={feedback_path}'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/download-transcript')
+def download_transcript():
+    """Download generated DOCX transcript"""
+    path = request.args.get('path', 'interview_transcript.docx')
+    return send_file(path, as_attachment=True)
+
+@app.route('/api/download-feedback')
+def download_feedback():
+    """Download generated feedback"""
+    path = request.args.get('path', 'final_interview_feedback.json')
+    return send_file(path, as_attachment=True)
 
 @app.route('/api/current-coding-question', methods=['GET'])
 def get_current_coding_question():
@@ -615,7 +675,7 @@ def api_generate_coding_question():
     data = request.get_json()
     domain = data.get("domain", "python")
     session_id = data.get("session_id", "default")
-
+    # session_id = data.get("session_id", "default")
     try:
         question = interviewer._generate_coding_question(domain)
         return jsonify({"question": question})
@@ -627,6 +687,109 @@ def api_generate_coding_question():
 def debug_state():
     """Debug endpoint to inspect current interview state"""
     return jsonify(interview_state)
+
+@app.route('/api/interview-config', methods=['GET', 'POST'])
+def handle_interview_config():
+    """Get or update interview configuration"""
+    if request.method == 'GET':
+        try:
+            with open("interview_config.json", "r") as f:
+                config = json.load(f)
+            return jsonify(config)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    elif request.method == 'POST':
+        try:
+            config = request.json
+            with open("interview_config.json", "w") as f:
+                json.dump(config, f, indent=2)
+            return jsonify({"status": "success"})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+
+@app.route('/api/client-questions', methods=['GET', 'POST', 'DELETE'])
+def handle_client_questions():
+    """Manage client-provided questions"""
+    try:
+        with open("interview_config.json", "r") as f:
+            config = json.load(f)
+        
+        if request.method == 'GET':
+            return jsonify({
+                "easy_questions": config.get("easy_questions", []),
+                "medium_questions": config.get("medium_questions", []),
+                "hard_questions": config.get("hard_questions", [])
+            })
+
+        elif request.method == 'POST':
+            data = request.json
+            question_type = data.get("type")
+            question = data.get("question")
+
+            if not question_type or not question:
+                return jsonify({"error": "Missing type or question"}), 400
+
+            if question_type not in ["easy", "medium", "hard"]:
+                return jsonify({"error": "Invalid question type"}), 400
+
+            key = f"{question_type}_questions"
+            if key not in config:
+                config[key] = []
+            
+            if question not in config[key]:
+                config[key].append(question)
+            
+            with open("interview_config.json", "w") as f:
+                json.dump(config, f, indent=2)
+            
+            return jsonify({"status": "success"})
+
+        elif request.method == 'DELETE':
+            data = request.json
+            question_type = data.get("type")
+            question = data.get("question")
+
+            if not question_type or not question:
+                return jsonify({"error": "Missing type or question"}), 400
+
+            key = f"{question_type}_questions"
+            if key in config and question in config[key]:
+                config[key].remove(question)
+            
+            with open("interview_config.json", "w") as f:
+                json.dump(config, f, indent=2)
+            
+            return jsonify({"status": "success"})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/section-timing', methods=['GET', 'POST'])
+def handle_section_timing():
+    """Get or update section timing configuration"""
+    try:
+        with open("interview_config.json", "r") as f:
+            config = json.load(f)
+
+        if request.method == 'GET':
+            return jsonify(config.get("section_durations", {}))
+
+        elif request.method == 'POST':
+            data = request.json
+            if "section_durations" not in config:
+                config["section_durations"] = {}
+
+            for section, duration in data.items():
+                config["section_durations"][section] = duration
+
+            with open("interview_config.json", "w") as f:
+                json.dump(config, f, indent=2)
+            
+            return jsonify({"status": "success"})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

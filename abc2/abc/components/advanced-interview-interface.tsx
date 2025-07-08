@@ -12,6 +12,11 @@ declare global {
     SpeechRecognition: any;
   }
 }
+ interface Message {
+    speaker: "AI" | "User"
+    message: string
+    timestamp: number
+  }
 
 
 export default function GoogleMeetInterview() {
@@ -28,17 +33,18 @@ export default function GoogleMeetInterview() {
   const [warnings, setWarnings] = useState<string[]>([])
   const [transcript, setTranscript] = useState<Message[]>([])
   const [tabSwitchWarnings, setTabSwitchWarnings] = useState<string[]>([])
-
+  const [showEndPopup, setShowEndPopup] = useState(false)
   const [isTabActive, setIsTabActive] = useState(true)
-
   const [waiting, setWaiting] = useState(false)
-
+  const [showViolationPopup, setShowViolationPopup] = useState(false)
   const [gotResponse, setGotResponse] = useState(false)
+  const [interviewEndedHandled, setInterviewEndedHandled] = useState(false)
+
 
   const handleUserSend = (message: string) => {
     console.log("User said:", message)
-  }
 
+  }
   const [interviewStatus, setInterviewStatus] = useState({
 
     active: false,
@@ -49,33 +55,62 @@ export default function GoogleMeetInterview() {
     current_question: null
   })
 
+  const [aiState, setAiState] = useState({
+    is_speaking: false,
+    is_listening: false,
+    current_message: '',
+    last_speech_start: null,
+    last_speech_end: null
+  })
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  interface Message {
-    speaker: "AI" | "User"
-    message: string
-    timestamp: number
-  }
+ 
 
-
-  // Fetch interview status every 3 seconds
+  
   const fetchInterviewStatus = async () => {
     try {
       const res = await fetch("http://localhost:5000/api/interview-status")
       const data = await res.json()
-      console.log("📊 Interview Status:", data)
+      console.log(" Interview Status:", data)
       setInterviewStatus(data)
 
-      // Auto-transition to code editor if backend moved to coding stage
+      // ✅ Handle forced termination or conclusion
+      if (!data.active || data.stage === 'terminated_due_to_violations' || data.stage === 'concluded') {
+        console.log(" Interview ended. Showing popup and resetting UI.")
+
+        // Stop video/audio stream
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach(track => track.stop())
+          mediaStreamRef.current = null
+        }
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = null
+        }
+
+        // Show popup and reset state
+        setShowEndPopup(true)
+        setInterviewStarted(false)
+        setShowCodeEditor(false)
+        setIsAISpeaking(false)
+        setWarnings([])
+        setTabSwitchWarnings([])
+        return
+      }
+
+
+      // Auto-open code editor if in coding stage
       if (data.stage === 'coding_challenges' && !showCodeEditor && data.current_question) {
-        console.log("🚀 Auto-opening code editor with question:", data.current_question)
         setQuestion(data.current_question)
         setShowCodeEditor(true)
       }
+
     } catch (error) {
       console.error("Failed to fetch interview status:", error)
     }
   }
+
 
   // Fetch coding question
   const fetchCodingQuestion = async () => {
@@ -184,7 +219,26 @@ export default function GoogleMeetInterview() {
 
   // Replace your transcript fetching useEffect in advanced-interview-interface.tsx with this:
 
+  const fetchAiState = async () => {
+    try {
+      const res = await fetch("http://localhost:5000/api/ai-state")
+      const data = await res.json()
+      console.log("🤖 AI State:", data)
+      setAiState(data)
+      setIsAISpeaking(data.is_speaking)
+    } catch (error) {
+      console.error("Failed to fetch AI state:", error)
+    }
+  }
 
+  const handleStartInterview = async () => {
+    // Reset backend first
+    await fetch("http://localhost:5000/api/reset-interview", { method: "POST" })
+
+    // Then start new interview
+    setInterviewStarted(true)
+    setShowEndPopup(false)
+  }
   // Tab switch detection
   useEffect(() => {
     const handleVisibilityChange = () => {
@@ -210,18 +264,15 @@ export default function GoogleMeetInterview() {
       }
     }
 
-    const handleWindowBlur = () => {
-      const warning = `⚠️ Window focus lost at ${new Date().toLocaleTimeString()}`
-      setTabSwitchWarnings(prev => [...prev, warning])
-    }
+    
 
     if (interviewStarted) {
       document.addEventListener('visibilitychange', handleVisibilityChange)
-      window.addEventListener('blur', handleWindowBlur)
+     
 
       return () => {
         document.removeEventListener('visibilitychange', handleVisibilityChange)
-        window.removeEventListener('blur', handleWindowBlur)
+        
       }
     }
   }, [interviewStarted])
@@ -261,7 +312,16 @@ export default function GoogleMeetInterview() {
     }
   }, [interviewStarted])
 
+  useEffect(() => {
+    if (interviewStarted) {
+      // Fetch immediately
+      fetchAiState()
 
+      // Then poll every 500ms for responsive UI
+      const interval = setInterval(fetchAiState, 500)
+      return () => clearInterval(interval)
+    }
+  }, [interviewStarted])
 
   // Also add this debug useEffect to monitor transcript changes:
   useEffect(() => {
@@ -283,8 +343,6 @@ export default function GoogleMeetInterview() {
       videoRef.current.srcObject = mediaStreamRef.current;
     }
   }, [interviewStarted, isVideoOff]);
-
-
 
   const listenToUser = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -368,16 +426,52 @@ export default function GoogleMeetInterview() {
   // Poll tab/camera warnings
   useEffect(() => {
     const pollWarnings = () => {
-      fetch("http://localhost:5000/api/interview-warnings")
+      fetch("http://localhost:5000/api/get-warnings")
         .then(res => res.json())
         .then(data => {
-          if (data?.warnings) setWarnings(data.warnings)
+          if (data?.warnings) {
+            setWarnings(data.warnings)
+
+            // 🚀 IMMEDIATE check on status if 3+ violations
+            if (data.warnings.length >= 3) {
+              fetchInterviewStatus()
+            }
+          }
         })
-        .catch(() => { })
+        .catch(console.error)
     }
     const interval = setInterval(pollWarnings, 5000)
     return () => clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    if (
+      !interviewEndedHandled &&
+      (!interviewStatus.active || interviewStatus.stage === "terminated_due_to_violations" || interviewStatus.stage === "concluded")
+    ) {
+      console.log("📢 Interview ended")
+
+      // Stop media stream
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop())
+        mediaStreamRef.current = null
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null
+      }
+
+      // Show violation-specific popup if terminated due to violations
+      if (interviewStatus.stage === "terminated_due_to_violations") {
+        setShowViolationPopup(true)  // Show violation popup first
+      } else {
+        setShowEndPopup(true)  // Show regular end popup for other cases
+      }
+
+      setInterviewEndedHandled(true)
+      setIsAISpeaking(false)
+    }
+  }, [interviewStatus])
+
 
   // Debug logging for status changes
   useEffect(() => {
@@ -388,10 +482,14 @@ export default function GoogleMeetInterview() {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-gray-900 text-white">
         <Button
-          onClick={() => setInterviewStarted(true)}
+          onClick={() => {
+            setInterviewStarted(true)
+            setShowEndPopup(false)  // ✅ Clear previous popup
+          }}
+
           className="absolute top-4 right-4 bg-blue-600 hover:bg-blue-700"
         >
-          Start Interview
+      Start Interview
         </Button>
         <h1 className="text-2xl font-bold mb-4">Welcome to the AI Interview</h1>
         <p className="text-gray-400">Click the button above to begin.</p>
@@ -462,6 +560,47 @@ export default function GoogleMeetInterview() {
         </div>
       )}
 
+      {showEndPopup && (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
+          <div className="bg-white text-black rounded-lg shadow-lg p-6 max-w-md text-center">
+            <h2 className="text-2xl font-bold mb-4">Interview Ended</h2>
+            <p className="mb-4">The interview has ended due to repeated violations or has been completed.</p>
+            <Button
+              className="bg-blue-600 text-white hover:bg-blue-700"
+              onClick={() => setShowEndPopup(false)}
+            >
+              Return to Start
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Violation Popup - Shows first */}
+      {showViolationPopup && (
+        <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50">
+          <div className="bg-red-50 border-2 border-red-500 text-red-900 rounded-lg shadow-2xl p-8 max-w-md text-center">
+            <div className="text-6xl mb-4">⚠️</div>
+            <h2 className="text-2xl font-bold mb-4 text-red-700">Interview Terminated</h2>
+            <p className="mb-6 text-lg">
+              You have committed <span className="font-bold text-red-600">3 violations</span>.
+              <br />We are concluding your interview.
+            </p>
+            <Button
+              className="bg-red-600 text-white hover:bg-red-700 px-8 py-3 text-lg"
+              onClick={() => {
+                setShowViolationPopup(false)
+                setInterviewStarted(false)
+                setShowCodeEditor(false)
+                setWarnings([])
+                setTabSwitchWarnings([])
+                // Reset everything and go to start page
+              }}
+            >
+              Okay, I Understand
+            </Button>
+          </div>
+        </div>
+      )}
       <div className="flex-1 relative bg-black overflow-hidden">
         <div className="h-full grid grid-cols-2 gap-2 p-4">
           {/* Local Video Feed */}
@@ -493,12 +632,11 @@ export default function GoogleMeetInterview() {
           {/* AI Interviewer Avatar */}
           <div className="relative bg-gray-800 rounded-lg overflow-hidden flex items-center justify-center">
             <AIInterviewerAvatar
-              isSpeaking={isAISpeaking}
-              isListening={!isAISpeaking}
-            />
-
-            {/* Transcript overlay at bottom like subtitles */}
-            {/* Transcript overlay at bottom like subtitles */}
+            isSpeaking={isAISpeaking}
+            isListening={!isAISpeaking}
+            currentMessage={aiState.current_message}
+            showVoiceActivity={true}
+          />
             <div className="absolute bottom-16 left-4 right-4 p-3 max-h-24 overflow-y-auto z-0">
               <TranscriptFooter
                 transcript={transcript}
@@ -543,7 +681,7 @@ export default function GoogleMeetInterview() {
           variant="ghost"
           size="icon"
           className="rounded-full w-14 h-14 text-white bg-blue-600 hover:bg-blue-700"
-          disabled={!interviewStatus.active}
+          disabled={interviewStatus.stage !== 'coding_challenge' || !interviewStatus.active}
         >
           {interviewStatus.stage === 'coding_challenges' && !question ? (
             <span className="animate-pulse">⏳</span>
