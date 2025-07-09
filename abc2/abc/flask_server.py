@@ -1,10 +1,10 @@
-from flask import Flask, request, jsonify,send_file
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import tempfile
 import os
-from flask_cors import  CORS
+from flask_cors import CORS
 import datetime
-from datetime import datetime , timedelta
+from datetime import datetime, timedelta
 import secrets
 import smtplib
 from email.mime.text import MIMEText
@@ -16,19 +16,29 @@ import numpy as np
 from flask import request
 
 from backend import ExpertTechnicalInterviewer
-from shared_state import interview_state, save_to_conversation_history , ai_state
+from shared_state import interview_state, save_to_conversation_history, ai_state
 
 
-
-  # when user sends a message
 
 app = Flask(__name__)
 CORS(app)
-# Add these global variables after your imports
+
+# Global variables
 interviewer = None
 interview_thread = None
 interview_stop_event = threading.Event()
 
+# Initialize violation state tracking in interview_state
+if 'current_violation_state' not in interview_state:
+    interview_state['current_violation_state'] = {
+        'face_absent_since': None,
+        'gaze_away_since': None,
+        'last_violation_type': None
+    }
+
+# Initialize warnings list if not exists
+if 'warnings' not in interview_state:
+    interview_state['warnings'] = []
 
 def initialize_interviewer():
     global interviewer
@@ -401,8 +411,19 @@ def log_warning():
 
 @app.route('/api/get-warnings', methods=['GET'])
 def get_warnings():
+    # Get warnings from interview_state instead of interviewer
     warnings = interview_state.get('warnings', [])
-    return jsonify({'warnings': warnings, 'count': len(warnings)})
+    
+    print(f"📋 Returning {len(warnings)} warnings to frontend")
+    for i, warning in enumerate(warnings):
+        print(f"  {i+1}. {warning.get('type', 'unknown')}: {warning.get('message', 'No message')}")
+    
+    return jsonify({
+        'warnings': warnings, 
+        'count': len(warnings),
+        'stage': interview_state.get('stage', 'unknown')
+    })
+
 
 # Fix 3: Add debug endpoint to check conversation history
 @app.route('/api/debug-transcript', methods=['GET'])
@@ -526,23 +547,172 @@ def get_interview_status():
         'current_question': interview_state.get('current_question')
     })
 
+
 @app.route('/api/face-status', methods=['POST'])
 def face_status():
-    data = request.json
-    face_present = data.get("face_present", True)
-    gaze_away = data.get("gaze_away", False)
+    global interviewer
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+        
+        face_present = data.get("face_present")
+        gaze_away = data.get("gaze_away", False)
+        
+        if face_present is None:
+            return jsonify({'error': 'face_present field is required'}), 400
+            
+        if not interviewer:
+            return jsonify({'error': 'No interviewer session active'}), 400
+            
+        # Initialize structures
+        if 'warnings' not in interview_state:
+            interview_state['warnings'] = []
+        if 'current_violation_state' not in interview_state:
+            interview_state['current_violation_state'] = {
+                'face_absent_since': None,
+                'gaze_away_since': None,
+                'last_violation_type': None
+            }
+        
+        current_time = datetime.utcnow()
+        violation_state = interview_state['current_violation_state']
+        new_violation_logged = False
+        
+        # Handle face absence detection
+        if not face_present:
+            if violation_state['face_absent_since'] is None:
+                # NEW face absence event starts
+                violation_state['face_absent_since'] = current_time
+                violation_state['last_violation_type'] = 'face_absence'
+                
+                # Log as new violation
+                interview_state['warnings'].append({
+                    'type': 'face_absence',
+                    'timestamp': current_time.isoformat(),
+                    'message': 'Face not visible in camera',
+                    'stage': interview_state.get('stage', 'unknown'),
+                    'severity': 'high',
+                    'event_start': current_time.isoformat()
+                })
+                
+                new_violation_logged = True
+                interviewer._handle_cheating_attempt("face_absence")
+                interviewer.speak("Please ensure your face is visible in the camera.")
+            
+            # Reset gaze away state if face is not present
+            violation_state['gaze_away_since'] = None
+            
+        else:
+            # Face is present - end face absence event if it was active
+            if violation_state['face_absent_since'] is not None:
+                # Update the last face absence warning with end time
+                for warning in reversed(interview_state['warnings']):
+                    if warning['type'] == 'face_absence' and 'event_end' not in warning:
+                        warning['event_end'] = current_time.isoformat()
+                        duration = (current_time - violation_state['face_absent_since']).total_seconds()
+                        warning['duration_seconds'] = duration
+                        break
+                
+                violation_state['face_absent_since'] = None
+            
+            # Handle gaze away detection (only when face is present)
+            if gaze_away:
+                if violation_state['gaze_away_since'] is None:
+                    # NEW gaze away event starts
+                    violation_state['gaze_away_since'] = current_time
+                    violation_state['last_violation_type'] = 'gaze_absence'
+                    
+                    # Log as new violation
+                    interview_state['warnings'].append({
+                        'type': 'gaze_absence',
+                        'timestamp': current_time.isoformat(),
+                        'message': 'Looking away from screen detected',
+                        'stage': interview_state.get('stage', 'unknown'),
+                        'severity': 'medium',
+                        'event_start': current_time.isoformat()
+                    })
+                    
+                    new_violation_logged = True
+                    interviewer._handle_cheating_attempt("gaze_absence")
+                    interviewer.speak("Please avoid looking away from the screen.")
+            else:
+                # Gaze is back - end gaze away event if it was active
+                if violation_state['gaze_away_since'] is not None:
+                    # Update the last gaze away warning with end time
+                    for warning in reversed(interview_state['warnings']):
+                        if warning['type'] == 'gaze_absence' and 'event_end' not in warning:
+                            warning['event_end'] = current_time.isoformat()
+                            duration = (current_time - violation_state['gaze_away_since']).total_seconds()
+                            warning['duration_seconds'] = duration
+                            break
+                    
+                    violation_state['gaze_away_since'] = None
+        
+        # Check violation count for termination
+        violation_count = len(interview_state.get('warnings', []))
+        interview_terminated = False
+        
+        if violation_count >= 3:
+            print("🔴 CRITICAL: Multiple violation events detected!")
+            interview_terminated = True
+            
+            # End any active violations
+            if violation_state['face_absent_since'] or violation_state['gaze_away_since']:
+                for warning in reversed(interview_state['warnings']):
+                    if 'event_end' not in warning:
+                        warning['event_end'] = current_time.isoformat()
+                        if warning['type'] == 'face_absence' and violation_state['face_absent_since']:
+                            duration = (current_time - violation_state['face_absent_since']).total_seconds()
+                            warning['duration_seconds'] = duration
+                        elif warning['type'] == 'gaze_absence' and violation_state['gaze_away_since']:
+                            duration = (current_time - violation_state['gaze_away_since']).total_seconds()
+                            warning['duration_seconds'] = duration
+                        break
+            
+            # Update state before termination
+            interview_state['active'] = False
+            interview_state['stage'] = 'terminated_due_to_violations'
+            interview_state['termination_reason'] = 'Multiple face/gaze violation events'
+            interview_state['terminated_at'] = current_time.isoformat()
+            
+            # Terminate interview
+            try:
+                if interviewer:
+                    docx_path, feedback_path = interviewer.end_interview()
+                    print(f"📄 Interview terminated. Files saved: {docx_path}, {feedback_path}")
+                    interviewer.speak("Interview terminated due to multiple violations.")
+            except Exception as e:
+                print(f"❌ Error during interview termination: {e}")
+            finally:
+                interviewer = None
+                reset_backend_state()
+                print("✅ Interview terminated due to violation events")
+        
+        return jsonify({
+            'status': 'processed',
+            'new_violation_logged': new_violation_logged,
+            'violation_count': violation_count,
+            'face_present': face_present,
+            'gaze_away': gaze_away,
+            'interview_terminated': interview_terminated,
+            'warnings_remaining': max(0, 3 - violation_count) if not interview_terminated else 0,
+            'current_violations': {
+                'face_absent': violation_state['face_absent_since'] is not None,
+                'gaze_away': violation_state['gaze_away_since'] is not None,
+                'face_absent_duration': (current_time - violation_state['face_absent_since']).total_seconds() if violation_state['face_absent_since'] else 0,
+                'gaze_away_duration': (current_time - violation_state['gaze_away_since']).total_seconds() if violation_state['gaze_away_since'] else 0
+            },
+            'timestamp': current_time.isoformat()
+        })
+        
+    except Exception as e:
+        print(f"❌ Error in face_status endpoint: {e}")
+        return jsonify({
+            'error': 'Internal server error',
+            'status': 'error'
+        }), 500
 
-    if not interviewer:
-        return jsonify({'error': 'No interviewer'}), 400
-
-    if not face_present:
-        interviewer._handle_cheating_attempt("face_absence")
-        interviewer.speak("Please ensure your face is visible in the camera.")
-    elif gaze_away:
-        interviewer._handle_cheating_attempt("gaze_absence")
-        interviewer.speak("Please avoid looking away from the screen.")
-
-    return jsonify({'status': 'processed'})
 
 @app.route('/api/end-interview', methods=['POST'])
 def end_interview():
@@ -811,4 +981,4 @@ def handle_section_timing():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000,extra_files=['your_app_files'])

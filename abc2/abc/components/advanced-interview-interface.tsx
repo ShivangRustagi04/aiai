@@ -33,13 +33,16 @@ export default function GoogleMeetInterview() {
   const [question, setQuestion] = useState("")
   const [warnings, setWarnings] = useState<string[]>([])
   const [transcript, setTranscript] = useState<Message[]>([])
-  const [tabSwitchWarnings, setTabSwitchWarnings] = useState<string[]>([])
+  const allWarnings = [...warnings]
   const [showEndPopup, setShowEndPopup] = useState(false)
   const [isTabActive, setIsTabActive] = useState(true)
   const [waiting, setWaiting] = useState(false)
   const [showViolationPopup, setShowViolationPopup] = useState(false)
   const [gotResponse, setGotResponse] = useState(false)
   const [interviewEndedHandled, setInterviewEndedHandled] = useState(false)
+  const [interviewTerminated, setInterviewTerminated] = useState(false)
+  
+
 
 
   const handleUserSend = (message: string) => {
@@ -96,7 +99,6 @@ export default function GoogleMeetInterview() {
         setShowCodeEditor(false)
         setIsAISpeaking(false)
         setWarnings([])
-        setTabSwitchWarnings([])
         return
       }
 
@@ -201,7 +203,6 @@ export default function GoogleMeetInterview() {
       setShowEndPopup(true)
       setShowCodeEditor(false)
       setWarnings([])
-      setTabSwitchWarnings([])
     } catch (err) {
       console.error("❌ Failed to end interview:", err)
     }
@@ -247,12 +248,7 @@ export default function GoogleMeetInterview() {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        // User switched tab/minimized
-        setIsTabActive(false)
-        const warning = `⚠️ Tab switch detected at ${new Date().toLocaleTimeString()}`
-        setTabSwitchWarnings(prev => [...prev, warning])
-
-        // Send to backend
+        // Tab switch detected — log to backend only
         fetch("http://localhost:5000/api/log-warning", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -262,24 +258,17 @@ export default function GoogleMeetInterview() {
             message: "User switched tabs or minimized window"
           })
         }).catch(console.error)
-      } else {
-        // User returned
-        setIsTabActive(true)
       }
-    }
-
-    
+    };
 
     if (interviewStarted) {
-      document.addEventListener('visibilitychange', handleVisibilityChange)
-     
-
+      document.addEventListener("visibilitychange", handleVisibilityChange);
       return () => {
-        document.removeEventListener('visibilitychange', handleVisibilityChange)
-        
-      }
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+      };
     }
-  }, [interviewStarted])
+  }, [interviewStarted]);
+
 
   useEffect(() => {
     const fetchTranscript = async () => {
@@ -347,6 +336,18 @@ export default function GoogleMeetInterview() {
       videoRef.current.srcObject = mediaStreamRef.current;
     }
   }, [interviewStarted, isVideoOff]);
+
+  useEffect(() => {
+  if (!showCodeEditor && interviewStarted && videoRef.current && videoRef.current.srcObject == null) {
+    navigator.mediaDevices
+      .getUserMedia({ video: true, audio: true })
+      .then((stream) => {
+        mediaStreamRef.current = stream
+        videoRef.current.srcObject = stream
+      })
+      .catch((err) => console.error("Error reinitializing video after code editor:", err))
+  }
+}, [showCodeEditor])
 
   const listenToUser = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -418,6 +419,22 @@ export default function GoogleMeetInterview() {
     }
   }
 
+  useEffect(() => {
+    if (!interviewStarted) return;
+
+    const interval = setInterval(() => {
+      fetch("http://localhost:5000/api/get-warnings")
+        .then(res => res.json())
+        .then(data => {
+          const newWarnings = data.warnings?.map((w: any) => `⚠️ ${w.message}`) || []
+          setWarnings(newWarnings)
+          setInterviewTerminated(data.stage === "terminated_due_to_violations")
+        })
+        .catch(console.error)
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [interviewStarted])
 
   // Poll interview status
   useEffect(() => {
@@ -428,25 +445,53 @@ export default function GoogleMeetInterview() {
   }, [interviewStarted])
 
   // Poll tab/camera warnings
+  // Replace the existing warning polling useEffect with this:
   useEffect(() => {
+    if (!interviewStarted) return;
+
     const pollWarnings = () => {
       fetch("http://localhost:5000/api/get-warnings")
         .then(res => res.json())
         .then(data => {
-          if (data?.warnings) {
-            setWarnings(data.warnings)
+          console.log("🚨 Fetched warnings:", data); // Debug log
 
-            // 🚀 IMMEDIATE check on status if 3+ violations
+          if (data?.warnings) {
+            const formattedWarnings = data.warnings.map((w: any) => {
+              switch (w.type) {
+                case "face_absence":
+                  return "⚠️ Face not visible in camera";
+                case "gaze_absence":
+                  return "⚠️ Looking away from screen detected";
+                case "camera_off":
+                  return "⚠️ Camera turned off";
+                case "tab_switch":
+                  return "⚠️ Tab switch detected";
+                default:
+                  return `⚠️ ${w.message || "Unknown warning"}`;
+              }
+            });
+
+            console.log("📋 Setting warnings:", formattedWarnings); // Debug log
+            setWarnings(formattedWarnings);
+
+            // Check for termination
             if (data.warnings.length >= 3) {
-              fetchInterviewStatus()
+              console.log("🔴 3+ violations detected, fetching status...");
+              fetchInterviewStatus();
             }
           }
         })
-        .catch(console.error)
-    }
-    const interval = setInterval(pollWarnings, 5000)
-    return () => clearInterval(interval)
-  }, [])
+        .catch(error => {
+          console.error("❌ Error fetching warnings:", error);
+        });
+    };
+
+    // Poll immediately, then every 3 seconds
+    pollWarnings();
+    const interval = setInterval(pollWarnings, 3000);
+
+    return () => clearInterval(interval);
+  }, [interviewStarted]); // Only depend on interviewStarted
 
   useEffect(() => {
     if (
@@ -548,24 +593,22 @@ export default function GoogleMeetInterview() {
   return (
     <div className="flex flex-col h-screen bg-gray-900">
       <div className="w-full flex justify-center pt-4">
-      <FaceDetection />
+        <FaceDetection />
       </div>
-      {(warnings.length > 0 || tabSwitchWarnings.length > 0) && (
-      <div className="bg-red-900 text-red-300 p-2 text-sm flex items-center space-x-2 justify-center">
-        <AlertCircle className="w-4 h-4" />
-        <span>
-        {tabSwitchWarnings.length > 0
-          ? tabSwitchWarnings[tabSwitchWarnings.length - 1]
-          : warnings[warnings.length - 1]
-        }
-        </span>
-        {tabSwitchWarnings.length > 1 && (
-        <span className="bg-red-700 px-2 py-1 rounded text-xs">
-          {tabSwitchWarnings.length} violations
-        </span>
-        )}
-      </div>
+      {warnings.length > 0 && (
+        <div className="bg-red-900 text-red-300 p-2 text-sm flex items-center space-x-2 justify-center">
+          <AlertCircle className="w-4 h-4" />
+          <span>{warnings[warnings.length - 1]}</span>
+          {warnings.length > 1 && (
+            <span className="bg-red-700 px-2 py-1 rounded text-xs">
+              {warnings.length} violations
+            </span>
+          )}
+        </div>
       )}
+
+
+
 
       {showEndPopup && (
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
@@ -581,6 +624,8 @@ export default function GoogleMeetInterview() {
           </div>
         </div>
       )}
+
+
 
       {/* Violation Popup - Shows first */}
       {showViolationPopup && (
@@ -599,7 +644,6 @@ export default function GoogleMeetInterview() {
                 setInterviewStarted(false)
                 setShowCodeEditor(false)
                 setWarnings([])
-                setTabSwitchWarnings([])
                 // Reset everything and go to start page
               }}
             >
@@ -654,11 +698,11 @@ export default function GoogleMeetInterview() {
               />
             </div>
 
-</div>
+          </div>
 
 
           {/* Top Bar */}
-          
+
         </div>
 
       </div>
@@ -689,4 +733,5 @@ export default function GoogleMeetInterview() {
         </Button>
       </div>
     </div>
-  )}
+  )
+}

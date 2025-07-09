@@ -79,12 +79,6 @@ class ExpertTechnicalInterviewer:
             self.coding_questions_asked = 0
             self.max_coding_questions = 2
             
-            # Initialize ElevenLabs
-            elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
-            if not elevenlabs_key:
-                raise ValueError("Please set the ELEVENLABS_API_KEY in .env file")
-            self.tts_client = ElevenLabs(api_key=elevenlabs_key)
-            
             # Initialize speech recognition
             self.recognizer = sr.Recognizer()
             self.recognizer.pause_threshold = 0.8
@@ -1244,46 +1238,17 @@ class ExpertTechnicalInterviewer:
         save_to_conversation_history("assistant", text)
 
         try:
-            # Generate audio with ElevenLabs
-            audio = self.tts_client.text_to_speech.stream(
-                voice_id="xnx6sPTtvU635ocDt2j7",
-                optimize_streaming_latency="0",
-                output_format="mp3_44100_128",
-                text=text,
-                model_id="eleven_turbo_v2"
-            )
-            # Create temporary file
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_file:
-                for chunk in audio:
-                    if chunk:
-                        tmp_file.write(chunk)
-                tmp_file_path = tmp_file.name
-            # Play using FFmpeg
-            subprocess.run([
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel", "error",
-                "-i", tmp_file_path,
-                "-f", "wav",
-                "pipe:1"
-            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            
-            # Play audio directly
-            subprocess.run([
-                "ffplay",
-                "-nodisp",
-                "-autoexit",
-                "-loglevel", "quiet",
-                tmp_file_path
-            ])
-            
-            # Clean up
-            os.unlink(tmp_file_path)
+            # Use Windows built-in TTS
+            import win32com.client
+            speaker = win32com.client.Dispatch("SAPI.SpVoice")
+            speaker.Speak(text)
             time.sleep(0.1)
 
         except Exception as e:
-            print(f"Audio playback error: {e}")
+            print(f"Windows TTS error: {e}")
             print("[TTS Failed] Audio could not be played")
+            # Fallback to just printing the text
+            print(f"[TEXT ONLY]: {text}")
 
     def listen(self, max_attempts=3):
         """Listen for user response using microphone with faster STT options"""
