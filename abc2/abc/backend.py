@@ -79,6 +79,8 @@ class ExpertTechnicalInterviewer:
             self.coding_questions_asked = 0
             self.max_coding_questions = 2
             
+
+            
             # Initialize speech recognition
             self.recognizer = sr.Recognizer()
             self.recognizer.pause_threshold = 0.8
