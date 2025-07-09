@@ -10,9 +10,8 @@ from docx import Document
 import pygetwindow as gw
 import threading
 import subprocess
-import tempfile
-from datetime import datetime, timedelta
-from elevenlabs.client import ElevenLabs
+from datetime import datetime
+
 import speech_recognition as sr
 
 import numpy as np
