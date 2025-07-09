@@ -4,6 +4,7 @@ import { Mic, MicOff, PhoneOff, Code, Camera, CameraOff, Users, AlertCircle } fr
 import { Button } from "@/components/ui/button"
 import CodeEditor from "@/components/code-editor"
 import AIInterviewerAvatar from "@/components/ai-interviewer-avatar"
+import FaceDetection from "@/components/face-detection"
 import TranscriptFooter from "./TranscriptFooter"
 // ✅ After imports, before `export default function...`
 declare global {
@@ -192,17 +193,20 @@ export default function GoogleMeetInterview() {
     }
   }
 
-  // Toggle Mute
-  const toggleMute = () => setIsMuted(!isMuted)
-
-  // Toggle Video
-  const toggleVideo = () => setIsVideoOff(!isVideoOff)
-
   // End Call
-  const handleEndCall = () => {
-    setInterviewStarted(false)
-
+  const handleEndCall = async () => {
+    try {
+      await fetch("http://localhost:5000/api/end-interview", { method: "POST" })
+      setInterviewStarted(false)
+      setShowEndPopup(true)
+      setShowCodeEditor(false)
+      setWarnings([])
+      setTabSwitchWarnings([])
+    } catch (err) {
+      console.error("❌ Failed to end interview:", err)
+    }
   }
+
 
   // Start Interview
   useEffect(() => {
@@ -543,21 +547,24 @@ export default function GoogleMeetInterview() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-900">
+      <div className="w-full flex justify-center pt-4">
+      <FaceDetection />
+      </div>
       {(warnings.length > 0 || tabSwitchWarnings.length > 0) && (
-        <div className="bg-red-900 text-red-300 p-2 text-sm flex items-center space-x-2 justify-center">
-          <AlertCircle className="w-4 h-4" />
-          <span>
-            {tabSwitchWarnings.length > 0
-              ? tabSwitchWarnings[tabSwitchWarnings.length - 1]
-              : warnings[warnings.length - 1]
-            }
-          </span>
-          {tabSwitchWarnings.length > 1 && (
-            <span className="bg-red-700 px-2 py-1 rounded text-xs">
-              {tabSwitchWarnings.length} violations
-            </span>
-          )}
-        </div>
+      <div className="bg-red-900 text-red-300 p-2 text-sm flex items-center space-x-2 justify-center">
+        <AlertCircle className="w-4 h-4" />
+        <span>
+        {tabSwitchWarnings.length > 0
+          ? tabSwitchWarnings[tabSwitchWarnings.length - 1]
+          : warnings[warnings.length - 1]
+        }
+        </span>
+        {tabSwitchWarnings.length > 1 && (
+        <span className="bg-red-700 px-2 py-1 rounded text-xs">
+          {tabSwitchWarnings.length} violations
+        </span>
+        )}
+      </div>
       )}
 
       {showEndPopup && (
@@ -632,11 +639,11 @@ export default function GoogleMeetInterview() {
           {/* AI Interviewer Avatar */}
           <div className="relative bg-gray-800 rounded-lg overflow-hidden flex items-center justify-center">
             <AIInterviewerAvatar
-            isSpeaking={isAISpeaking}
-            isListening={!isAISpeaking}
-            currentMessage={aiState.current_message}
-            showVoiceActivity={true}
-          />
+              isSpeaking={isAISpeaking}
+              isListening={!isAISpeaking}
+              currentMessage={aiState.current_message}
+              showVoiceActivity={true}
+            />
             <div className="absolute bottom-16 left-4 right-4 p-3 max-h-24 overflow-y-auto z-0">
               <TranscriptFooter
                 transcript={transcript}
@@ -651,37 +658,19 @@ export default function GoogleMeetInterview() {
 
 
           {/* Top Bar */}
-          <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-black/50 backdrop-blur-sm rounded-full px-4 py-2">
-            <div className="flex items-center space-x-2 text-white">
-              <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-              <span className="text-sm font-medium">
-                Technical Interview
-              </span>
-              <Users className="w-4 h-4" />
-              <span className="text-sm">2</span>
-            </div>
-          </div>
+          
         </div>
 
       </div>
 
       {/* Control Bar */}
       <div className="bg-gray-800 px-6 py-4 flex items-center justify-center space-x-6 relative z-10">
-        <Button
-          onClick={() => listenToUser()}
-          variant="ghost"
-          size="icon"
-          className={`rounded-full w-14 h-14 ${isMuted ? 'bg-red-600' : 'bg-green-700'} text-white hover:bg-green-800`}
-        >
-          {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-        </Button>
 
         <Button
           onClick={handleCodeEditorClick}
           variant="ghost"
           size="icon"
           className="rounded-full w-14 h-14 text-white bg-blue-600 hover:bg-blue-700"
-          disabled={interviewStatus.stage !== 'coding_challenge' || !interviewStatus.active}
         >
           {interviewStatus.stage === 'coding_challenges' && !question ? (
             <span className="animate-pulse">⏳</span>
@@ -697,15 +686,6 @@ export default function GoogleMeetInterview() {
           className="rounded-full w-14 h-14 bg-red-600 hover:bg-red-700 text-white"
         >
           <PhoneOff className="w-5 h-5" />
-        </Button>
-
-        <Button
-          onClick={toggleVideo}
-          variant="ghost"
-          size="icon"
-          className={`rounded-full w-14 h-14 ${isVideoOff ? 'bg-red-600' : 'bg-gray-700'} text-white`}
-        >
-          {isVideoOff ? <CameraOff className="w-5 h-5" /> : <Camera className="w-5 h-5" />}
         </Button>
       </div>
     </div>

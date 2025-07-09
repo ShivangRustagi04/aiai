@@ -14,7 +14,7 @@ import tempfile
 from datetime import datetime, timedelta
 from elevenlabs.client import ElevenLabs
 import speech_recognition as sr
-from scipy.spatial.distance import euclidean
+
 import numpy as np
 
 from shared_state import save_to_conversation_history
@@ -32,27 +32,34 @@ class ExpertTechnicalInterviewer:
             self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             if not os.getenv("OPENAI_API_KEY"):
                 raise ValueError("Please set the OPENAI_API_KEY in .env file")
-
+            self.monitoring_active = True
+            self.interview_active = True
+            self.camera_active = False
+            self.tab_monitor_ready = False
+            self.max_cheating_warnings = 3
+            self.cheating_warnings = 0
+            self.tone_warnings = 0
+            self.eye_detection_attempts = 0
+            self.max_eye_detection_attempts = 5
+            self.last_face_detection_time = time.time()
+            self.last_gaze_detection_time = time.time()
+            self.interview_start_time = None
+            self.section_start_time = None
             self.model = model
             self.interview_state = "introduction"
             self.skill_questions_asked = 0
             self.latest_code_submission = None
             self.last_question = None
             self.just_repeated = False
-            self.gaze_away_threshold = 5  # seconds before warning
-            self.last_gaze_detection_time = time.time()
+            self.gaze_away_threshold = 5 
             
-            
-            self.eye_detection_attempts = 0
-            self.max_eye_detection_attempts = 5 
+           
             self.current_domain = None
-            self.gaze_away_threshold = 5  # seconds before warning
-            self.last_gaze_detection_time = time.time()
             
             
             self.face_detection_interval = 5  # seconds between checks
             self.max_face_absence_time = 5  # seconds before warning
-            self.last_face_detection_time = time.time()
+            
             
             
             
@@ -65,15 +72,10 @@ class ExpertTechnicalInterviewer:
             self.conversation_history = []
             self.is_listening = False
             self.interrupted = False
-            self.tone_warnings = 0
-            self.cheating_warnings = 0
             self.question_count = 0
-            self.tab_monitor_ready = False
-            self.last_face_detection_time = time.time()
             self.tab_change_detected = False
             self.response_delay = 0.3
             self.accent = str(accent).lower() if accent else "default"
-            self.interview_active = True
             self.coding_questions_asked = 0
             self.max_coding_questions = 2
             
@@ -138,7 +140,6 @@ class ExpertTechnicalInterviewer:
             }
                 
             # Start monitoring threads
-            self.monitoring_active = True
             self.last_question = None
             self.tab_monitor_thread = threading.Thread(target=self._monitor_tab_changes)
             self.tab_monitor_thread.daemon = True
@@ -219,15 +220,17 @@ class ExpertTechnicalInterviewer:
         
         return False
 
-    def _check_face_presence(self):
+    def _check_face_presence(self, frame=None):
         """Check if a face is currently visible in camera"""
-        if not self.cap or not self.cap.isOpened():
-            return False
-            
-        ret, frame = self.cap.read()
-        if not ret:
-            return False
-            
+        # If no frame provided, read from camera
+        if frame is None:
+            if not self.cap or not self.cap.isOpened():
+                return False
+                
+            ret, frame = self.cap.read()
+            if not ret:
+                return False
+        
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = self.face_cascade.detectMultiScale(gray, 1.1, 4)
         
@@ -244,29 +247,54 @@ class ExpertTechnicalInterviewer:
     def _handle_face_absence(self):
         self._handle_cheating_attempt("face_absence")
 
+    def end_interview(self):
+        """Gracefully shut down the interview session."""
+        self.interview_active = False
+        self.monitoring_active = False
+
+        try:
+            self._stop_camera()
+        except Exception as e:
+            print(f"Error stopping camera: {e}")
+    
+        try:
+            docx_path = self._save_transcription_to_docx()
+            feedback_path = self._generate_feedback_from_docx(docx_path)
+        except Exception as e:
+            print(f"⚠️ Failed to generate outputs: {e}")
+            docx_path, feedback_path = None, None
+    
+        return docx_path, feedback_path
+
     def _monitor_face_presence(self):
         """Monitor for face and gaze with simpler approach"""
+        print("[Face Monitor] Starting face monitoring thread")
         while self.monitoring_active and self.interview_active:
             try:
                 if not self.camera_active:
+                    print("[Face Monitor] Camera not active, waiting...")
                     time.sleep(self.face_detection_interval)
                     continue
                     
                 # Check every interval
                 if time.time() - self.last_face_detection_time > self.face_detection_interval:
+                    print("[Face Monitor] Checking for face...")
                     ret, frame = self.cap.read()
                     if not ret:
+                        print("[Face Monitor] Could not read frame from camera")
                         time.sleep(1)
                         continue
                         
-                    # Check basic face presence
+                    # Check basic face presence with the frame we just read
                     face_found = self._check_face_presence(frame)
+                    print(f"[Face Monitor] Face found: {face_found}")
                     
                     if face_found:
                         self.last_face_detection_time = time.time()
                         
-                        # Check gaze direction
+                        # Check gaze direction with the same frame
                         gaze_away = self._check_gaze_direction(frame)
+                        print(f"[Face Monitor] Gaze away: {gaze_away}")
                         
                         if gaze_away is True:  # Definitely looking away
                             if not hasattr(self, 'gaze_away_start_time'):
@@ -274,19 +302,22 @@ class ExpertTechnicalInterviewer:
                             else:
                                 gaze_away_duration = time.time() - self.gaze_away_start_time
                                 if gaze_away_duration > self.gaze_away_threshold:
+                                    print("[Face Monitor] Gaze away threshold exceeded")
                                     self._handle_gaze_absence()
                         else:
                             if hasattr(self, 'gaze_away_start_time'):
                                 del self.gaze_away_start_time
                     else:
                         absence_duration = time.time() - self.last_face_detection_time
+                        print(f"[Face Monitor] Face absence duration: {absence_duration}")
                         if absence_duration > self.max_face_absence_time:
+                            print("[Face Monitor] Face absence threshold exceeded")
                             self._handle_face_absence()
                             
                 time.sleep(0.5)
                 
             except Exception as e:
-                print(f"Monitoring error: {e}")
+                print(f"[Face Monitor] Error: {e}")
                 time.sleep(5)
 
     def _handle_gaze_absence(self):
@@ -1127,7 +1158,6 @@ class ExpertTechnicalInterviewer:
     def _start_camera(self):
         """Start the camera for face detection"""
         if not self.camera_active:
-            self.cap = cv2.VideoCapture(0)
             self.camera_active = True
 
     def _stop_camera(self):
@@ -1136,18 +1166,6 @@ class ExpertTechnicalInterviewer:
             self.cap.release()
             self.cap = None
             self.camera_active = False
-
-    def _restart_camera(self):
-        try:
-            if self.cap:
-                self.cap.release()
-            self.cap = cv2.VideoCapture(0)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            self.camera_active = True
-        except Exception as e:
-            print(f"Camera restart failed: {e}")
-
     def _monitor_tab_changes(self):
         while not self.tab_monitor_ready:
             time.sleep(0.5)
@@ -1302,7 +1320,7 @@ class ExpertTechnicalInterviewer:
                 print(f"Speech recognition error: {e}")
                 if attempt < max_attempts - 1:
                     self.speak("There was an issue. Please try again.", interruptible=False)
-                    time.sleep(2)
+                    time.sleep(0.1)
         
         placeholder = "[Response unclear after multiple attempts]"
         save_to_conversation_history("user", placeholder)
@@ -1549,7 +1567,6 @@ if __name__ == "__main__":
     try:
         interviewer = ExpertTechnicalInterviewer(
             config_file="interview_config.json",
-            total_duration=80  # Can be overridden by config
         )
         interviewer.start_interview()
     except Exception as e:

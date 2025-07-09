@@ -1,14 +1,19 @@
 from flask import Flask, request, jsonify,send_file
 from flask_cors import CORS
+import tempfile
+import os
 from flask_cors import  CORS
 import datetime
-from datetime import datetime, timedelta, timezone
+from datetime import datetime , timedelta
 import secrets
 import smtplib
 from email.mime.text import MIMEText
 import json
 import threading
-import random
+import base64
+import cv2
+import numpy as np
+from flask import request
 
 from backend import ExpertTechnicalInterviewer
 from shared_state import interview_state, save_to_conversation_history , ai_state
@@ -22,7 +27,7 @@ CORS(app)
 # Add these global variables after your imports
 interviewer = None
 interview_thread = None
-interviewer = None
+interview_stop_event = threading.Event()
 
 
 def initialize_interviewer():
@@ -73,38 +78,7 @@ def start_interview():
 
 
 
-# Replace your transcript endpoint in flask_server.py with this:
-def force_stop_interviewer():
-    """Forcefully stop all interviewer processes"""
-    global interviewer, interview_thread, interview_stop_event
-    
-    print("🛑 FORCE STOPPING ALL INTERVIEWER PROCESSES...")
-    
-    # Set stop event
-    interview_stop_event.set()
-    
-    # Stop interviewer object
-    if interviewer:
-        try:
-            # If your interviewer has a stop method, call it
-            if hasattr(interviewer, 'stop'):
-                interviewer.stop()
-            # Reset to None
-            interviewer = None
-        except Exception as e:
-            print(f"Error stopping interviewer: {e}")
-    
-    # Force stop thread
-    if interview_thread and interview_thread.is_alive():
-        interview_thread.join(timeout=2)
-        if interview_thread.is_alive():
-            print("⚠️ Thread still alive, forcing termination")
-    
-    interview_thread = None
-    print("✅ All interviewer processes stopped")
 
-# Also, make sure your conversation history is being saved properly.
-# Update your process_speech endpoint to ensure timestamps are saved:
 
 # In your process_speech function, replace the conversation history saving with:
 def save_to_conversation_history(role, content):
@@ -112,7 +86,7 @@ def save_to_conversation_history(role, content):
     interview_state["conversation_history"].append({
         "role": role,
         "content": content,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": datetime.utcnow().isoformat()
     })
 from datetime import datetime
 
@@ -300,7 +274,7 @@ def speak_with_state_tracking(interviewer, text):
     ai_state['is_listening'] = False
     ai_state['current_message'] = text
     ai_state['last_speech_start'] = datetime.utcnow().isoformat()
-    ai_state['last_speech_start'] = datetime.now(timezone.utc).isoformat()
+
     print("🎙️ AI STARTED SPEAKING:", ai_state)
 
     try:
@@ -326,7 +300,7 @@ def mark_ai_finished_speaking():
     ai_state['is_speaking'] = False
     ai_state['is_listening'] = True
     ai_state['last_speech_end'] = datetime.utcnow().isoformat()
-    ai_state['last_speech_end'] = datetime.now(timezone.utc).isoformat()
+
     print("🔕 AI FINISHED SPEAKING:", ai_state)
 
 def stop_interview_thread():
@@ -355,6 +329,20 @@ def save_to_conversation_history(role, content):
     for msg in interview_state["conversation_history"][-2:]:
         print(f"  - {msg['role']}: {msg['content']}")
 
+def reset_backend_state():
+    interview_state.clear()
+    interview_state.update({
+        'active': False,
+        'stage': 'not_started',
+        'skill_questions_asked': 0,
+        'coding_questions_asked': 0,
+        'current_domain': 'unknown',
+        'current_question': None
+    })
+    Warning.clear()
+    # tab_warning.clear()  # Removed because tab_warning is not defined
+    interview_stop_event.clear()
+
 
 @app.route('/api/reset-interview', methods=['POST'])
 def reset_interview():
@@ -364,6 +352,7 @@ def reset_interview():
 
 @app.route('/api/log-warning', methods=['POST'])
 def log_warning():
+    global interviewer 
     data = request.json
     warning_type = data.get('type')
     timestamp = data.get('timestamp')
@@ -390,9 +379,15 @@ def log_warning():
         # You could end the interview here or send additional warnings
         interview_state['active'] = False
         interview_state['stage'] = 'terminated_due_to_violations'
-        stop_interview_thread()  # Stop the thread
+        if interviewer:
+            try:
+                # ✅ Properly stop AI interviewer
+                docx_path, feedback_path = interviewer.end_interview()
+                print("📄 Transcript and feedback saved.")
+            except Exception as e:
+                print(f"❌ Error during interview termination: {e}") # Stop the thread
         interviewer = None
-        complete_interview_reset()
+        reset_backend_state()
         print("✅ Interview fully terminated due to violations")
     
     return jsonify({
@@ -515,6 +510,8 @@ def mark_link_used(token):
     
     interview_state['interview_links'][token]['used'] = True
     return jsonify({'status': 'success'})
+
+
 @app.route('/api/interview-status', methods=['GET'])
 def get_interview_status():
     """Get current interview status and progress"""
@@ -529,31 +526,53 @@ def get_interview_status():
         'current_question': interview_state.get('current_question')
     })
 
+@app.route('/api/face-status', methods=['POST'])
+def face_status():
+    data = request.json
+    face_present = data.get("face_present", True)
+    gaze_away = data.get("gaze_away", False)
+
+    if not interviewer:
+        return jsonify({'error': 'No interviewer'}), 400
+
+    if not face_present:
+        interviewer._handle_cheating_attempt("face_absence")
+        interviewer.speak("Please ensure your face is visible in the camera.")
+    elif gaze_away:
+        interviewer._handle_cheating_attempt("gaze_absence")
+        interviewer.speak("Please avoid looking away from the screen.")
+
+    return jsonify({'status': 'processed'})
+
 @app.route('/api/end-interview', methods=['POST'])
 def end_interview():
     """Manually end the interview"""
+    global interviewer
     global interview_state
-    
-    print(" Ending interview manually...")
+
+    print("🛑 Ending interview manually...")
     interview_state['active'] = False
     interview_state['stage'] = 'concluded'
-    
-    # Generate outputs before stopping
-    try:
-        docx_path = interviewer._save_transcription_to_docx()
-        feedback_path = interviewer._generate_feedback_from_docx(docx_path)
-    except Exception as e:
-        print(f"⚠️ Failed to generate outputs: {e}")
-    
-    # Stop the interview thread
-    stop_interview_thread()
-    
+
+    # Stop interviewer instance and generate outputs
+    docx_path, feedback_path = None, None
+    if interviewer:
+        try:
+            docx_path, feedback_path = interviewer.end_interview()  # Proper stop
+        except Exception as e:
+            print(f"⚠️ Failed to end interview gracefully: {e}")
+        interviewer = None  # Kill the object
+
+    reset_backend_state()  # Clear global state, warnings, etc.
+
     return jsonify({
         'status': 'ended',
         'message': 'Interview has been ended manually.',
         'transcript_path': docx_path,
         'feedback_path': feedback_path
     })
+
+
 
 @app.route('/api/export-transcript', methods=['POST'])
 def export_transcript():
@@ -675,7 +694,7 @@ def api_generate_coding_question():
     data = request.get_json()
     domain = data.get("domain", "python")
     session_id = data.get("session_id", "default")
-    # session_id = data.get("session_id", "default")
+
     try:
         question = interviewer._generate_coding_question(domain)
         return jsonify({"question": question})
