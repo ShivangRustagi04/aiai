@@ -11,9 +11,7 @@ import pygetwindow as gw
 import threading
 import subprocess
 from datetime import datetime
-
 import speech_recognition as sr
-
 import numpy as np
 
 from shared_state import save_to_conversation_history
@@ -1252,7 +1250,6 @@ class ExpertTechnicalInterviewer:
             print(f"[TEXT ONLY]: {text}")
 
     def listen(self, max_attempts=3):
-        """Listen for user response using microphone with faster STT options"""
         for attempt in range(max_attempts):
             try:
                 print("\nListening... (Speak now)")

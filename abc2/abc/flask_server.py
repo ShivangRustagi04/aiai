@@ -1,19 +1,13 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-import tempfile
-import os
-from flask_cors import CORS
-import datetime
+
 from datetime import datetime, timedelta
 import secrets
 import smtplib
 from email.mime.text import MIMEText
 import json
 import threading
-import base64
-import cv2
-import numpy as np
-from flask import request
+import random
 
 from backend import ExpertTechnicalInterviewer
 from shared_state import interview_state, save_to_conversation_history, ai_state
